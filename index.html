@@ -209,7 +209,7 @@ body{background:linear-gradient(180deg,#080c17 0%,#0a0f1e 100%);color:var(--txt)
   flex-shrink:0;
   min-height:var(--chat-header-h);
 }
-.chatwin header .title{display:flex;align-items:center;gap:9px;min-width:0}
+.chatwin header .title{display:flex;align-items:center;gap:9px;min-width:0;flex:1}
 .chatwin header .title .av{
   width:32px;height:32px;border-radius:50%;
   background:linear-gradient(135deg,#1d4ed8,#22d3ee);
@@ -217,6 +217,15 @@ body{background:linear-gradient(180deg,#080c17 0%,#0a0f1e 100%);color:var(--txt)
 }
 .chatwin header .title .nm{font-size:13px;font-weight:700;color:#fff;line-height:1.2}
 .chatwin header .title .st{font-size:10px;color:#7dd3fc;margin-top:1px;line-height:1.2}
+
+.chatwin header .chat-close{
+  background:transparent;border:none;color:#7dd3fc;font-size:18px;
+  cursor:pointer;padding:6px 10px;border-radius:8px;
+  transition:background .15s;flex-shrink:0;margin-left:auto;
+  font-family:inherit;line-height:1;
+}
+.chatwin header .chat-close:hover{background:#1a2c47;color:#fff}
+.chatwin header .chat-close:active{transform:scale(.92)}
 
 .step-bar{
   display:flex;justify-content:space-between;align-items:center;gap:6px;
@@ -415,9 +424,6 @@ body.kb-open .chatwin{
     <div class="live" id="liveStatus"><span class="dot"></span><span id="liveTxt">LIVE</span></div>
   </div>
 
-  <!-- ═══════════════════════════════════════════════════════
-       [NEW v9.1] MEXC Convert Limit Calculator
-       ═══════════════════════════════════════════════════════ -->
   <div class="card" id="calcCard">
     <h2>
       <span>🧮 MEXC Convert Limit</span>
@@ -502,6 +508,7 @@ body.kb-open .chatwin{
         <div class="st" id="sessionTag">Session #1</div>
       </div>
     </div>
+    <button class="chat-close" id="chatClose" aria-label="Close chat" type="button">✕</button>
   </header>
   <div class="step-bar">
     <span class="step-text" id="stepText">📍 শুরু করুন</span>
@@ -579,17 +586,10 @@ body.kb-open .chatwin{
 </div>
 
 <script>
-/* ═══════════════════════════════════════════════════════════════
-   PEPE Smart Trader — v9.1
-   Changes over v9.0:
-   [V9.1-1] NEW: MEXC Convert Limit calculator card (stateless).
-   [V9.1-2] Hooks into fetchLivePrice() for live diff %.
-   [V9.1-3] 8 edge cases handled (blank, invalid, offline, etc.).
-   ═══════════════════════════════════════════════════════════════ */
 (function(){
 'use strict';
 
-/* ── Decimal engine (unchanged) ── */
+/* ── Decimal engine ── */
 const D = {
   mul(a,b){ const A=dp(a),B=dp(b); return fmtScaled(BigInt(A.i+A.f)*BigInt(B.i+B.f), A.d+B.d); },
   div(a,b,dp_=18){
@@ -638,7 +638,6 @@ function fmtScaled(big, scale){
   return out==='-0'?'0':out;
 }
 
-/* ── Formatters ── */
 function n(x){ const v=Number(x); return isFinite(v)?v:0; }
 function fmtU(x,d=2){
   const v=n(x);
@@ -690,7 +689,6 @@ function formatShortPrice(input){
 }
 function fmtP(x){ return formatShortPrice(x); }
 
-/* ── MEXC live price ── */
 const MEXC_PRICE = 'https://proxy.cors.dev/https://api.mexc.com/api/v3/ticker/price?symbol=PEPEUSDT';
 const market = { price:null, ts:0, status:'init', failCount:0 };
 
@@ -710,7 +708,7 @@ async function fetchLivePrice(){
     if(market.price && Date.now()-market.ts < 5*60*1000) market.status='stale';
     else market.status='offline';
   }
-  renderTicker(); renderDashboard(); renderCalc();  /* [V9.1] hook */
+  renderTicker(); renderDashboard(); renderCalc();
 }
 
 function renderTicker(){
@@ -731,7 +729,6 @@ function renderTicker(){
   } else elM.textContent = 'সংযোগ স্থাপন হচ্ছে…';
 }
 
-/* ── Rounding helpers ── */
 function roundPrice(val){
   const v=n(val); if(!isFinite(v)) return String(val);
   return v.toFixed(9).replace(/0+$/,'').replace(/\.$/,'');
@@ -747,7 +744,6 @@ function floorQty(val){
   return (Math.floor(v*f)/f).toFixed(8).replace(/0+$/,'').replace(/\.$/,'');
 }
 
-/* ── Storage ── */
 const DB_NAME='pepeSmartTrader', DB_VER=1, STORE='kv';
 let dbReady=null;
 function openDB(){
@@ -787,14 +783,12 @@ const store = {
   }
 };
 
-/* ── Chat history ── */
 let chatHistory=[];
 const CHAT_KEY='chatHistory';
 async function persistChat(){ try{ await store.set(CHAT_KEY, chatHistory); }catch(e){} }
 async function loadChat(){ const arr=await store.get(CHAT_KEY,[]); chatHistory=Array.isArray(arr)?arr:[]; }
 async function clearChat(){ chatHistory=[]; await store.del(CHAT_KEY); }
 
-/* ── Session model ── */
 let session=null;
 let settings={maxInv:0,maxBuys:0,feePct:0};
 let orderSeq=1;
@@ -867,7 +861,6 @@ async function loadAll(){
   await loadChat();
 }
 
-/* ── Financial engine (unchanged) ── */
 function calculateExitTarget(totalBuyCost, totalSellProceeds, remainingQty, targetPct, targetMode){
   const targetReturnTotal = D.mul(totalBuyCost, D.add('1', D.div(targetPct,'100',18)));
   const feeRate = D.div(String(settings.feePct||0),'100',18);
@@ -1017,11 +1010,9 @@ function syncConversationAfterOrderAction(orderId, action){
   else goToState(o.side==='buy'?'askBuyPrice':'afterBuyFilled');
 }
 
-/* ── DOM ── */
 const el = id => document.getElementById(id);
 const chatBox = el('chat'), input = el('chatInput'), sendBtn = el('sendBtn'), quickBox = el('quickBtns');
 
-/* ── Sanitizer ── */
 const ALLOWED_TAGS=new Set(['B','I','BR','CODE','SPAN','DIV','SMALL','EM','STRONG']);
 const ALLOWED_CLASS=new Set(['hl','pos','neg','gold','mut','warn','danger-msg']);
 function sanitizeHTML(html){
@@ -1046,11 +1037,7 @@ function sanitizeHTML(html){
   return tpl.innerHTML;
 }
 
-/* ═══════════════════════════════════════════════════════════════
-   [V9.1] MEXC CONVERT LIMIT CALCULATOR
-   Stateless. No session/settings persistence. No side effects on
-   the trading state machine. Reads live price for diff display.
-   ═══════════════════════════════════════════════════════════════ */
+/* ═══ MEXC Convert Limit Calculator ═══ */
 const CALC_IDS = {
   card:'calcCard', body:'calcBody', toggle:'calcToggle',
   price:'calcPrice', amount:'calcAmount',
@@ -1061,7 +1048,6 @@ const CALC_QUICK_USDT = [1, 5, 10, 25, 50, 100];
 let calcCollapsed = false;
 let calcCopyText = '';
 
-/* Parse user-typed USDT/price. Strips commas. Returns normalized string or null. */
 function calcParseNumber(v, {allowZero=false} = {}){
   let s = String(v==null?'':v).trim().replace(/,/g,'');
   if(!s || s==='.' || s==='-' || s==='+') return null;
@@ -1072,8 +1058,6 @@ function calcParseNumber(v, {allowZero=false} = {}){
   if(!allowZero && num === 0) return null;
   return s;
 }
-
-/* Format a decimal string (e.g. from D engine) with thousand separators. */
 function formatBigNumber(str, maxDecimals){
   let s = String(str);
   let neg = false;
@@ -1086,8 +1070,6 @@ function formatBigNumber(str, maxDecimals){
   let out = intPart + (fracPart ? '.' + fracPart : '');
   return (neg ? '-' : '') + out;
 }
-
-/* Enable/disable the Live button based on market state. */
 function updateCalcLiveButton(){
   const btn = el(CALC_IDS.useLive);
   if(!btn) return;
@@ -1095,27 +1077,19 @@ function updateCalcLiveButton(){
   btn.disabled = !ok;
   btn.title = ok ? 'Use current MEXC price' : 'Live price not available';
 }
-
-/* Idempotent: reads inputs, writes outputs. Safe to call anytime. */
 function renderCalc(){
-  if(!el(CALC_IDS.price)) return;  // calculator not in DOM
+  if(!el(CALC_IDS.price)) return;
   updateCalcLiveButton();
-
   const priceEl  = el(CALC_IDS.price);
   const amountEl = el(CALC_IDS.amount);
   const pepePerEl= el(CALC_IDS.pepePer);
   const estEl    = el(CALC_IDS.estPepe);
   const diffEl   = el(CALC_IDS.diff);
   const copyBtn  = el(CALC_IDS.copy);
-
   const priceStr  = calcParseNumber(priceEl.value);
   const amountStr = calcParseNumber(amountEl.value, {allowZero:true});
-
-  // Invalid border only when user typed something
   priceEl.classList.toggle('invalid', !!priceEl.value.trim() && !priceStr);
   amountEl.classList.toggle('invalid', !!amountEl.value.trim() && !amountStr);
-
-  // ── Output 1: When 1 USDT reaches … PEPE ──
   if(!priceStr){
     pepePerEl.textContent = '—';
     pepePerEl.className = 'v gold calc-hero-v';
@@ -1128,78 +1102,46 @@ function renderCalc(){
     pepePerEl.className = 'v gold calc-hero-v';
     copyBtn.disabled = false;
   }
-
-  // ── Output 2: Estimated PEPE ──
-  if(!priceStr){
-    estEl.textContent = '—';
-    estEl.className = 'v';
-  } else if(amountStr === null){
-    estEl.textContent = '—';
-    estEl.className = 'v';
-  } else if(Number(amountStr) === 0){
-    estEl.textContent = '0';
-    estEl.className = 'v mut';
-  } else {
+  if(!priceStr){ estEl.textContent='—'; estEl.className='v'; }
+  else if(amountStr===null){ estEl.textContent='—'; estEl.className='v'; }
+  else if(Number(amountStr)===0){ estEl.textContent='0'; estEl.className='v mut'; }
+  else {
     const estStr = D.div(amountStr, priceStr, 18);
     estEl.textContent = formatBigNumber(estStr, 4);
     estEl.className = 'v';
   }
-
-  // ── Output 3: Target vs Live diff % ──
-  if(!priceStr){
-    diffEl.textContent = '—';
-    diffEl.className = 'v mut';
-    diffEl.removeAttribute('title');
-  } else if(!market.price || market.status === 'offline'){
-    diffEl.textContent = '—';
-    diffEl.className = 'v mut';
-    diffEl.title = 'Live price not available';
-  } else {
-    const diffStr = D.mul(
-      D.div(D.sub(priceStr, market.price), market.price, 18),
-      '100'
-    );
+  if(!priceStr){ diffEl.textContent='—'; diffEl.className='v mut'; diffEl.removeAttribute('title'); }
+  else if(!market.price || market.status==='offline'){ diffEl.textContent='—'; diffEl.className='v mut'; diffEl.title='Live price not available'; }
+  else {
+    const diffStr = D.mul(D.div(D.sub(priceStr, market.price), market.price, 18),'100');
     const diffNum = Number(diffStr);
     const sign = diffNum > 0 ? '+' : '';
     const staleMark = market.status === 'stale' ? ' ⚠️' : '';
     diffEl.textContent = sign + diffNum.toFixed(3) + '%' + staleMark;
-    if(diffNum < -0.0005){
-      diffEl.className = 'v pos';
-      diffEl.title = 'Target is below live price (favourable for buying)';
-    } else if(diffNum > 0.0005){
-      diffEl.className = 'v neg';
-      diffEl.title = 'Target is above live price (unfavourable for buying)';
-    } else {
-      diffEl.className = 'v';
-      diffEl.title = 'Target roughly equals live price';
-    }
+    if(diffNum < -0.0005){ diffEl.className='v pos'; diffEl.title='Target is below live price (favourable for buying)'; }
+    else if(diffNum > 0.0005){ diffEl.className='v neg'; diffEl.title='Target is above live price (unfavourable for buying)'; }
+    else { diffEl.className='v'; diffEl.title='Target roughly equals live price'; }
   }
 }
-
 function useLiveForCalc(){
   if(!market.price) return;
   el(CALC_IDS.price).value = roundPrice(market.price);
   renderCalc();
 }
-
 async function copyCalcValue(){
   if(!calcCopyText){ toast('⚠️ Target price দিন'); return; }
   const ok = await copyToClipboard(calcCopyText);
   if(ok) toast('📋 Copied: ' + formatBigNumber(calcCopyText, 4));
   else toast('⚠️ Copy failed');
 }
-
 function initCalc(){
   const priceEl = el(CALC_IDS.price);
   const amountEl= el(CALC_IDS.amount);
-  if(!priceEl || !amountEl) return;  // calculator not present
-
+  if(!priceEl || !amountEl) return;
   priceEl.addEventListener('input', renderCalc);
   amountEl.addEventListener('input', renderCalc);
   el(CALC_IDS.useLive).addEventListener('click', useLiveForCalc);
   el(CALC_IDS.copy).addEventListener('click', copyCalcValue);
-
-  // Quick USDT buttons
   const qbox = el(CALC_IDS.quick);
   if(qbox){
     qbox.innerHTML = '';
@@ -1211,8 +1153,6 @@ function initCalc(){
       qbox.appendChild(b);
     });
   }
-
-  // Collapse toggle
   const toggle = el(CALC_IDS.toggle);
   const body   = el(CALC_IDS.body);
   if(toggle && body){
@@ -1222,13 +1162,61 @@ function initCalc(){
       toggle.textContent = calcCollapsed ? '▶' : '▼';
     });
   }
-
   renderCalc();
 }
 
-/* ═══════════════════════════════════════════════════════════════
-   CONVERSATION STATES (unchanged from v9.0)
-   ═══════════════════════════════════════════════════════════════ */
+/* ═══ PWA Setup ═══ */
+function setupPWA(){
+  function svgIcon(size){
+    const svg =
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + size + ' ' + size + '">' +
+      '<rect width="' + size + '" height="' + size + '" rx="' + Math.round(size*0.15) + '" fill="#0a0f1e"/>' +
+      '<text x="' + (size/2) + '" y="' + Math.round(size*0.72) + '" ' +
+        'font-size="' + Math.round(size*0.55) + '" text-anchor="middle" fill="#22d3ee">🐸</text>' +
+      '</svg>';
+    return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+  }
+  const icon192 = svgIcon(192);
+  const icon512 = svgIcon(512);
+  const icon32  = svgIcon(32);
+
+  const manifest = {
+    name: 'PEPE Smart Trader',
+    short_name: 'PEPE Trader',
+    description: 'MEXC Convert Limit Calculator + Trading Assistant',
+    start_url: './',
+    scope: './',
+    display: 'standalone',
+    orientation: 'portrait',
+    background_color: '#0a0f1e',
+    theme_color: '#0a0f1e',
+    icons: [
+      { src: icon192, sizes:'192x192', type:'image/svg+xml', purpose:'any maskable' },
+      { src: icon512, sizes:'512x512', type:'image/svg+xml', purpose:'any maskable' }
+    ]
+  };
+  try{
+    const manifestURL = URL.createObjectURL(
+      new Blob([JSON.stringify(manifest)], { type:'application/manifest+json' })
+    );
+    const ml = document.getElementById('appManifest');
+    if(ml) ml.href = manifestURL;
+  }catch(e){ console.warn('manifest:', e); }
+
+  const ai = document.getElementById('appleIcon');
+  if(ai) ai.href = icon192;
+  const fi = document.getElementById('favIcon');
+  if(fi) fi.href = icon32;
+
+  if('serviceWorker' in navigator &&
+     (location.protocol==='https:' || location.hostname==='localhost' || location.hostname==='127.0.0.1')){
+    navigator.serviceWorker.register('./sw.js')
+      .then(reg => console.log('SW registered:', reg.scope))
+      .catch(err => console.warn('SW registration failed:', err));
+  }
+}
+
+/* ═══ Conversation States ═══ */
 const STATES = {
   askBuyPrice: {
     field:'buyPrice',
@@ -1662,7 +1650,6 @@ const STATES = {
   }
 };
 
-/* ── Parsers ── */
 function parsePEPEPrice(v){
   v=String(v==null?'':v).trim().replace(/,/g,'');
   if(!/^\d*\.?\d+(e-?\d+)?$/i.test(v)) return null;
@@ -1684,7 +1671,6 @@ function parseUSDT(v){
   return v;
 }
 
-/* ── Chat rendering ── */
 let userScrolledUp=false;
 const SCROLL_THRESHOLD=60;
 function isNearBottom(){ return (chatBox.scrollHeight-chatBox.scrollTop-chatBox.clientHeight)<SCROLL_THRESHOLD; }
@@ -1925,7 +1911,6 @@ function startConversation(){
   goToState('askBuyPrice'); persist();
 }
 
-/* ── Dashboard buttons (unchanged from v9.0) ── */
 const DASHBOARD_BUTTONS = [
   { id:'quickExit', group:'primary',   icon:'⚡', label:'Quick Exit',    hint:'Target বদলে দ্রুত বের হোন', cls:'primary', handler:()=>onQuickExit() },
   { id:'sell',      group:'primary',   icon:'💱', label:'Sell Record',  hint:'Sell লিপিবদ্ধ করুন',       cls:'primary', handler:()=>onSellRecord() },
@@ -1956,10 +1941,7 @@ function renderDashboardButtons(){
 function onQuickExit(){
   const p=computePosition();
   const tState=getTradeState();
-  if(tState.kind==='pending'){
-    toast('⚠️ Pending order আছে — আগে Fill/Cancel করুন');
-    return;
-  }
+  if(tState.kind==='pending'){ toast('⚠️ Pending order আছে — আগে Fill/Cancel করুন'); return; }
   if(tState.kind==='targetHit'){
     openChat(); userScrolledUp=false;
     botSay(completionMessage(p));
@@ -1968,10 +1950,7 @@ function onQuickExit(){
     updateStepLabel();
     return;
   }
-  if(!D.gt(p.remainingQty,'0')){
-    toast('⚠️ কোনো PEPE নেই — Quick Exit সেট করা সম্ভব নয়');
-    return;
-  }
+  if(!D.gt(p.remainingQty,'0')){ toast('⚠️ কোনো PEPE নেই — Quick Exit সেট করা সম্ভব নয়'); return; }
   openChat(); userScrolledUp=false;
   session.conversation={state:'chooseExitPlan',data:{}};
   goToState('chooseExitPlan');
@@ -2198,7 +2177,6 @@ function confirmDialog(title,msg,onOk){
   ok.onclick=()=>{ cleanup(); onOk(); }; cancel.onclick=cleanup;
 }
 
-/* ── Fill modal ── */
 let fillCtx = null;
 const FILL_PERCENTS = [100,75,50,25,'custom'];
 let fillSelectedPct = 100;
@@ -2210,7 +2188,6 @@ function openFillModal(orderId){
   const planUsdtLeft = D.sub(o.usdt||'0', o.filledUsdt||'0');
   fillCtx = { orderId, side:o.side, price:o.price, planQtyLeft, planUsdtLeft, order:o };
   fillSelectedPct = 100;
-
   el('fmTitle').textContent = (o.status==='partial'?'Add fill — ':'Fill — ')+o.id;
   const alreadyRow = (o.status==='partial'||o.status==='filled')
     ? `<br>Already filled: ${fmtU(o.filledUsdt)} USDT · ${fmtQFull(o.filledQty)} PEPE`
@@ -2218,10 +2195,8 @@ function openFillModal(orderId){
   el('fmInfo').innerHTML =
     `<b>${o.side==='buy'?'🟢 BUY':'🔴 SELL'}</b> @ ${fmtP(o.price)}<br>` +
     `Plan: ${fmtU(o.usdt)} USDT · ${fmtQFull(o.qty)} PEPE` + alreadyRow;
-
   el('fmRemaining').innerHTML =
     `<b>Remaining to fill:</b><br>${fmtU(planUsdtLeft)} USDT · ${fmtQFull(planQtyLeft)} PEPE`;
-
   renderFillQuickBtns();
   applyFillPercent(100);
   el('fillModal').classList.add('show');
@@ -2417,7 +2392,6 @@ el('histClose').addEventListener('click', ()=>el('historyModal').classList.remov
 el('histExport').addEventListener('click', exportSessionJSON);
 el('btnHistory').addEventListener('click', openHistoryModal);
 
-/* ═══ Settings modal wiring ═══ */
 el('setCancel').addEventListener('click', ()=>el('settingsModal').classList.remove('show'));
 el('setExport').addEventListener('click', exportSessionJSON);
 el('setSave').addEventListener('click', async ()=>{
@@ -2434,7 +2408,6 @@ el('setSave').addEventListener('click', async ()=>{
   toast('✅ Settings সেভ হয়েছে');
 });
 
-/* ═══ Send wiring ═══ */
 sendBtn.addEventListener('click', handleSubmit);
 input.addEventListener('keydown', e=>{
   if(e.key==='Enter' && !e.isComposing && !e.shiftKey){
@@ -2442,7 +2415,6 @@ input.addEventListener('keydown', e=>{
   }
 });
 
-/* ═══ Step restart ═══ */
 el('stepRestart').addEventListener('click', ()=>{
   const st = STATES[session.conversation.state];
   if(!st || st.end || session.conversation.state==='sessionComplete'){
@@ -2459,7 +2431,6 @@ el('stepRestart').addEventListener('click', ()=>{
   toast('🔄 ধাপটি আবার শুরু হয়েছে');
 });
 
-/* ═══ FAB / floating widget ═══ */
 const fab=el('fab'), chatwin=el('chatwin');
 let isOpen=false, dragState=null, suppressClickUntil=0;
 
@@ -2543,12 +2514,31 @@ function closeChat(programmatic){
     }catch(e){}
   }
 }
+
 fab.addEventListener('click', (e)=>{
   if(Date.now()<suppressClickUntil){ e.preventDefault(); e.stopPropagation(); return; }
   if(isOpen) closeChat(); else openChat();
 });
 
-/* ── Triple-tap FAB → open Settings (was truncated in original) ── */
+/* ═══ FIX: Chat ✕ close button ═══ */
+const chatCloseBtn = el('chatClose');
+if(chatCloseBtn) chatCloseBtn.addEventListener('click', () => closeChat());
+
+/* ═══ FIX: Mobile back button (popstate) ═══ */
+window.addEventListener('popstate', () => {
+  if(isOpen) closeChat(true);
+});
+
+/* ═══ FIX: Escape key ═══ */
+document.addEventListener('keydown', (e) => {
+  if(e.key === 'Escape' && isOpen){
+    const openModal = document.querySelector('.modal.show');
+    if(openModal) return;
+    closeChat();
+  }
+});
+
+/* ═══ Triple-tap FAB → open Settings ═══ */
 (function(){
   const TRIPLE_MS=600;
   let tapCount=0, firstTapTime=0, resetTimer=null;
@@ -2568,9 +2558,10 @@ fab.addEventListener('click', (e)=>{
 (async function boot(){
   initFabPosition();
   renderDashboardButtons();
+  setupPWA();
   await loadAll();
   renderAll();
-  initCalc();          /* [V9.1] init the calculator */
+  initCalc();
   startConversation();
   fetchLivePrice();
   setInterval(fetchLivePrice, 30000);

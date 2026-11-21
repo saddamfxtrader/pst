@@ -1,12 +1,14 @@
-/* PEPE Smart Trader v9.0 — Service Worker
+/* PEPE Smart Trader v9.1 — Service Worker
    Strategy:
      - Cache same-origin app shell (index.html, sw.js).
      - Do NOT cache MEXC API (always live fetch).
      - Navigation fallback → cached index.html.
 
-   Cache bumped to v6 for v9.0 release.
+   Cache bumped to v7 for v9.1 release
+   (Convert Limit Calculator is inline; version bump forces old
+    cache eviction so offline users get the new shell).
 */
-const CACHE = 'pepe-shell-v6';
+const CACHE = 'pepe-shell-v7';
 const SHELL = ['./', './index.html', './sw.js'];
 
 self.addEventListener('install', (e) => {

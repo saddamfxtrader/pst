@@ -1180,28 +1180,7 @@ function setupPWA(){
   const icon512 = svgIcon(512);
   const icon32  = svgIcon(32);
 
-  const manifest = {
-    name: 'PEPE Smart Trader',
-    short_name: 'PEPE Trader',
-    description: 'MEXC Convert Limit Calculator + Trading Assistant',
-    start_url: './',
-    scope: './',
-    display: 'standalone',
-    orientation: 'portrait',
-    background_color: '#0a0f1e',
-    theme_color: '#0a0f1e',
-    icons: [
-      { src: icon192, sizes:'192x192', type:'image/svg+xml', purpose:'any maskable' },
-      { src: icon512, sizes:'512x512', type:'image/svg+xml', purpose:'any maskable' }
-    ]
-  };
-  try{
-    const manifestURL = URL.createObjectURL(
-      new Blob([JSON.stringify(manifest)], { type:'application/manifest+json' })
-    );
-    const ml = document.getElementById('appManifest');
-    if(ml) ml.href = manifestURL;
-  }catch(e){ console.warn('manifest:', e); }
+
 
   const ai = document.getElementById('appleIcon');
   if(ai) ai.href = icon192;

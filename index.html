@@ -1097,7 +1097,7 @@ function renderCalc(){
     calcCopyText = '';
   } else {
     const pepePerStr = D.div('1', priceStr, 18);
-    calcCopyText = pepePerStr.replace(/0+$/, '').replace(/\.$/, '') || '0';
+   calcCopyText = pepePerStr || '0';
     pepePerEl.textContent = formatBigNumber(pepePerStr, 4);
     pepePerEl.className = 'v gold calc-hero-v';
     copyBtn.disabled = false;

@@ -11,7 +11,7 @@
      back-button handler, manifest+icons). Version bump forces
      old v7 cache eviction so offline users get the new shell.
    ──────────────────────────────────────────────── */
-const CACHE = 'pepe-shell-v8';
+const CACHE = 'pepe-shell-v9';
 const SHELL = ['./', './index.html', './sw.js'];
 
 /* ── Install: pre-cache shell (robust — one failure doesn't abort) ── */

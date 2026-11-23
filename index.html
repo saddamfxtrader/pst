@@ -2701,25 +2701,20 @@ el('histExport').onclick = () => {
 };
 el('btnHistory').onclick = openHistoryModal;
 
-/* Fill modal */
+/* ═══ FIXED: Allow manual input of both Qty and USDT ═══ */
 el('fmQty').addEventListener('input', () => {
   if(!fillCtx) return;
-  const q = el('fmQty').value.trim();
-  const qN = parseUSDT(q);
-  if(qN !== null && n(q) > 0){
-    el('fmUsdt').value = D.mul(floorQty(q), fillCtx.price);
-  }
+  // শুধু প্রিভিউ আপডেট করবে, ডলারের ঘরে জোর করে কিছু বসাবে না
   updateFillPreview();
 });
+
 el('fmUsdt').addEventListener('input', () => {
   if(!fillCtx) return;
-  const u = el('fmUsdt').value.trim();
-  const uN = parseUSDT(u);
-  if(uN !== null && n(u) > 0){
-    el('fmQty').value = floorQty(D.div(u, fillCtx.price, 18));
-  }
+  // শুধু প্রিভিউ আপডেট করবে, পেপের ঘরে জোর করে কিছু বসাবে না
   updateFillPreview();
 });
+
+  
 el('fmCancel').onclick = closeFillModal;
 el('fmSave').onclick = () => {
   if(!fillCtx) return;

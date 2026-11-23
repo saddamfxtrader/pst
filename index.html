@@ -411,7 +411,7 @@ body.kb-open .chatwin{
 <div class="app" id="app">
   <div class="brand">
     <h1>🐸 PEPE Smart Trader</h1>
-    <p>MEXC Convert Limit · v9.1 · Dynamic Recovery Assistant</p>
+    <p>MEXC Convert Limit · v9.2 · Dynamic Recovery Assistant</p>
     <div class="pair">PEPE / USDT</div>
   </div>
 
@@ -594,9 +594,10 @@ const D = {
   mul(a,b){ const A=dp(a),B=dp(b); return fmtScaled(BigInt(A.i+A.f)*BigInt(B.i+B.f), A.d+B.d); },
   div(a,b,dp_=18){
     const A=dp(a),B=dp(b);
-    if(B.i==='0'&&!B.f) return '0';
+    if(B.i==='0'&&!B.f || D.isZero(b)) return '0';
     const num=BigInt(A.i+A.f)*(10n**BigInt(B.d+dp_));
     const den=BigInt(B.i+B.f)*(10n**BigInt(A.d));
+    if(den === 0n) return '0';
     return fmtScaled(num/den, dp_);
   },
   add(a,b){
@@ -604,7 +605,7 @@ const D = {
     return fmtScaled(BigInt(A.i+A.f)*(10n**BigInt(dpv-A.d))+BigInt(B.i+B.f)*(10n**BigInt(dpv-B.d)), dpv);
   },
   sub(a,b){ return D.add(a,D.neg(b)); },
-  neg(a){ if(!a||a==='0') return '0'; return a.startsWith('-')?a.slice(1):'-'+a; },
+  neg(a){ if(!a||a==='0'||a==='-0'||D.isZero(a)) return '0'; return String(a).startsWith('-')?String(a).slice(1):'-'+a; },
   cmp(a,b){
     const A=dp(a),B=dp(b); const dpv=Math.max(A.d,B.d,0);
     const ia=BigInt(A.i+A.f)*(10n**BigInt(dpv-A.d));
@@ -614,14 +615,21 @@ const D = {
   gt(a,b){return D.cmp(a,b)>0;},
   lt(a,b){return D.cmp(a,b)<0;},
   gte(a,b){return D.cmp(a,b)>=0;},
-  isZero(a){ return D.cmp(a,'0')===0; }
+  isZero(a){ try { return D.cmp(String(a), '0') === 0; } catch(e) { return false; } }
 };
 function dp(s){
   s=String(s==null?'0':s).trim();
   if(s===''||s==='.') s='0';
   let neg=false;
   if(s.startsWith('-')){neg=true;s=s.slice(1);}
-  if(!/^\d*\.?\d*$/.test(s)){ s=Number(s).toFixed(18); }
+  if(!/^\d*\.?\d*$/.test(s)){ 
+    const n = Number(s);
+    if (isFinite(n)) {
+      s=n.toFixed(18);
+    } else {
+      s='0';
+    }
+  }
   let [i,f='']=s.split('.');
   i=i||'0'; f=f.replace(/0+$/,'');
   return {i:(neg?'-':'')+i, f, d:f.length};
@@ -689,21 +697,39 @@ function formatShortPrice(input){
 }
 function fmtP(x){ return formatShortPrice(x); }
 
-const MEXC_PRICE = 'https://proxy.cors.dev/https://api.mexc.com/api/v3/ticker/price?symbol=PEPEUSDT';
+const MEXC_DIRECT_PRICE = 'https://api.mexc.com/api/v3/ticker/price?symbol=PEPEUSDT';
+const MEXC_PROXY_PRICE = 'https://proxy.cors.dev/https://api.mexc.com/api/v3/ticker/price?symbol=PEPEUSDT';
 const market = { price:null, ts:0, status:'init', failCount:0 };
+
+async function fetchPriceFrom(url) {
+    const ctrl = new AbortController();
+    const t = setTimeout(()=>ctrl.abort(), 8000);
+    try {
+        const res = await fetch(url, { signal: ctrl.signal, cache:'no-store' });
+        clearTimeout(t);
+        if(!res.ok) throw new Error('HTTP '+res.status);
+        const j = await res.json();
+        const p = j && (j.price || (Array.isArray(j) && j[0] && j[0].price));
+        if(!p || Number(p) <= 0) throw new Error('Invalid price data');
+        return String(p);
+    } catch (e) {
+        clearTimeout(t);
+        throw e;
+    }
+}
 
 async function fetchLivePrice(){
   try{
-    const ctrl = new AbortController();
-    const t = setTimeout(()=>ctrl.abort(), 8000);
-    const res = await fetch(MEXC_PRICE, { signal: ctrl.signal, cache:'no-store' });
-    clearTimeout(t);
-    if(!res.ok) throw new Error('HTTP '+res.status);
-    const j = await res.json();
-    const p = j && (j.price || (Array.isArray(j) && j[0] && j[0].price));
-    if(!p) throw new Error('no price');
-    market.price = String(p); market.ts = Date.now(); market.status='live'; market.failCount=0;
+    let price;
+    try {
+        price = await fetchPriceFrom(MEXC_DIRECT_PRICE);
+    } catch (e) {
+        console.warn('Direct MEXC fetch failed, trying proxy...', e);
+        price = await fetchPriceFrom(MEXC_PROXY_PRICE);
+    }
+    market.price = price; market.ts = Date.now(); market.status='live'; market.failCount=0;
   }catch(e){
+    console.error('All price fetches failed:', e);
     market.failCount++;
     if(market.price && Date.now()-market.ts < 5*60*1000) market.status='stale';
     else market.status='offline';
@@ -730,18 +756,30 @@ function renderTicker(){
 }
 
 function roundPrice(val){
-  const v=n(val); if(!isFinite(v)) return String(val);
-  return v.toFixed(9).replace(/0+$/,'').replace(/\.$/,'');
+  const v = D.div(val, '1', 9);
+  return v;
 }
 function ceilPrice(val){
-  const v=n(val); if(!isFinite(v)) return String(val);
-  const f=1e9;
-  return (Math.ceil(v*f)/f).toFixed(9).replace(/0+$/,'').replace(/\.$/,'');
+  const s = String(val);
+  const parts = s.split('.');
+  if (parts.length === 1) return s;
+  const decimals = parts[1].length;
+  if (decimals <= 9) return s;
+  const factor = '1' + '0'.repeat(decimals - 9);
+  const scaled = D.mul(s, factor);
+  const intScaled = Math.ceil(Number(scaled));
+  return D.div(String(intScaled), factor, 9);
 }
 function floorQty(val){
-  const v=n(val); if(!isFinite(v)) return String(val);
-  const f=1e8;
-  return (Math.floor(v*f)/f).toFixed(8).replace(/0+$/,'').replace(/\.$/,'');
+  const s = String(val);
+  const parts = s.split('.');
+  if (parts.length === 1) return s;
+  const decimals = parts[1].length;
+  if (decimals <= 8) return s;
+  const factor = '1' + '0'.repeat(decimals - 8);
+  const scaled = D.mul(s, factor);
+  const intScaled = Math.floor(Number(scaled));
+  return D.div(String(intScaled), factor, 8);
 }
 
 const DB_NAME='pepeSmartTrader', DB_VER=1, STORE='kv';
@@ -977,18 +1015,37 @@ function fillOrder(id, addQty, addUsdt, isFromChat){
   isFromChat=!!isFromChat;
   const o = session.orders.find(x=>x.id===id);
   if(!o || o.status==='filled' || o.status==='cancelled') return false;
-  const qAdd = addQty==null ? D.sub(o.qty||'0', o.filledQty||'0') : String(addQty);
-  const uAdd = addUsdt==null ? D.sub(o.usdt||'0', o.filledUsdt||'0') : String(addUsdt);
-  const newQty = D.add(o.filledQty||'0', qAdd);
-  const newUsdt = D.add(o.filledUsdt||'0', uAdd);
-  o.filledQty = newQty;
-  o.filledUsdt = newUsdt;
-  o.fillPrice = n(newQty)>0 ? D.div(newUsdt, newQty, 18) : o.price;
-  o.status = D.gte(newQty, o.qty) ? 'filled' : 'partial';
-  persist(); renderAll();
-  if(!isFromChat) syncConversationAfterOrderAction(id,'filled');
-  toast(o.status==='partial'?'✅ Partial fill added':'✅ Order filled');
-  return true;
+  
+  try {
+    const qAdd = addQty==null ? D.sub(o.qty||'0', o.filledQty||'0') : String(addQty);
+    const uAdd = addUsdt==null ? D.sub(o.usdt||'0', o.filledUsdt||'0') : String(addUsdt);
+
+    if(!/^\d*\.?\d+$/.test(qAdd) || !/^\d*\.?\d+$/.test(uAdd)) throw new Error('Invalid number format');
+    if(D.gt(qAdd, D.sub(o.qty||'0', o.filledQty||'0'))) throw new Error('Filled quantity exceeds remaining plan');
+    if(D.gt(uAdd, D.sub(o.usdt||'0', o.filledUsdt||'0'))) throw new Error('Filled USDT exceeds remaining plan');
+    if(D.lt(qAdd, '0') || D.isZero(qAdd)) throw new Error('Fill quantity must be positive');
+    if(D.lt(uAdd, '0') || D.isZero(uAdd)) throw new Error('Fill USDT must be positive');
+
+    if(o.side === 'sell') {
+        const p = computePosition();
+        const newSellQty = D.add(p.totalSellQty, qAdd);
+        if(D.gt(newSellQty, p.totalBuyQty)) throw new Error('Sell quantity exceeds total holdings');
+    }
+
+    const newQty = D.add(o.filledQty||'0', qAdd);
+    const newUsdt = D.add(o.filledUsdt||'0', uAdd);
+    o.filledQty = newQty;
+    o.filledUsdt = newUsdt;
+    o.fillPrice = n(newQty)>0 ? D.div(newUsdt, newQty, 18) : o.price;
+    o.status = D.gte(newQty, o.qty) ? 'filled' : 'partial';
+    persist(); renderAll();
+    if(!isFromChat) syncConversationAfterOrderAction(id,'filled');
+    toast(o.status==='partial'?'✅ Partial fill added':'✅ Order filled');
+    return true;
+  } catch (err) {
+    toast('❌ Error: ' + err.message);
+    return false;
+  }
 }
 function cancelOrder(id, isFromChat){
   isFromChat=!!isFromChat;
@@ -1719,833 +1776,400 @@ function goToState(name){
     const p=computePosition();
     if(!D.gt(p.remainingQty,'0')){
       if(sessionTargetHit()) name='sessionComplete';
-      else{ botSay('⚠️ কোনো PEPE নেই — Sell করা সম্ভব নয়। নতুন Buy করুন।'); name='afterBuyFilled'; }
-    } else if(sessionTargetHit()) name='sessionComplete';
-  }
-  if(['askBuyPrice','askInvest','askTargetPct','confirmBuy'].includes(name)){
-    if(session.orders.some(o=>o.status==='pending') && name!=='afterPending'){
-      const pend = session.orders.find(o=>o.status==='pending');
-      session.conversation = { state: pend.side==='buy'?'afterPending':'afterSellPending', data:{ pendingOrderId: pend.id } };
-      persist();
-      const st = STATES[session.conversation.state];
-      setTimeout(()=>{ botSay('⚠️ একটি pending order আছে — আগে সেটি Fill/Cancel করুন।'); setInputEnabled(true, st.placeholder, st.quick, false); },120);
-      updateStepLabel();
-      return;
+      else{ botSay(`⚠️ কোনো PEPE holdings নেই।`);
+        name='afterBuyFilled';
+      }
     }
   }
 
-  if(!name || name==='done'){
-    const st=STATES.done;
-    session.conversation={state:'done',data:{}}; persist();
-    setTimeout(()=>{ botSay(st.say); setInputEnabled(false); updateStepLabel(); },120);
-    return;
+  if(name==='sessionComplete' && !sessionTargetHit()){
+    botSay(`⚠️ Target এখনো পূরণ হয়নি, তাই Session Complete করা যাচ্ছে না।`);
+    name = 'afterSellFilled';
   }
-  const st=STATES[name];
-  if(!st){ setInputEnabled(false); return; }
-  session.conversation.state=name;
-  if(!session.conversation.data) session.conversation.data={};
+
+  session.conversation = session.conversation || {data:{}};
+  session.conversation.state = name;
+  const st = STATES[name];
+  if(!st){ botSay('⚠️ অজানা state'); return; }
   persist();
   updateStepLabel();
 
-  if(name==='sessionComplete'){
-    const say = typeof st.say==='function'?st.say():st.say;
-    setTimeout(()=>{ botSay(say); setInputEnabled(false,'Session সম্পন্ন — Reset করুন',null); },120);
+  const data = session.conversation.data || {};
+  const sayFn = (typeof st.say === 'function') ? st.say : (()=>st.say);
+  const msg = sayFn(data);
+  if(msg && msg.trim() && name!=='__keep'){
+    botSay(msg);
+    if(!st.end) session.conversation.lastPrompt = msg;
+  }
+
+  if(st.end){
+    setInputEnabled(false,'',null,false);
     return;
   }
-  const say = typeof st.say==='function'?st.say(session.conversation.data):st.say;
-  setTimeout(()=>{
-    botSay(say);
-    if(st.end){ setInputEnabled(false); return; }
-    const q = typeof st.quick==='function'?st.quick(session.conversation.data):st.quick;
-    setInputEnabled(true, st.placeholder, q, !!st.back);
-  },120);
+  const q = typeof st.quick === 'function' ? st.quick(data) : st.quick;
+  setInputEnabled(true, st.placeholder, q, !!st.back);
 }
 
 function handleBack(){
-  const st = STATES[session.conversation.state];
-  if(!st || !st.back) return;
-  const target = typeof st.back==='function' ? st.back(session.conversation.data) : st.back;
-  if(!target) return;
-  const curField = st.field;
-  if(curField && session.conversation.data[curField]!==undefined){
-    delete session.conversation.data[curField];
-  }
-  if(session.conversation.data._fill!==undefined) delete session.conversation.data._fill;
-  if(session.conversation.data.pendingOrderId!==undefined) delete session.conversation.data.pendingOrderId;
-  input.value='';
-  goToState(target);
+  if(submitLock) return;
+  const current = session.conversation.state;
+  const st = STATES[current];
+  if(!st) return;
+  const raw = st.back;
+  const prev = typeof raw==='function'?raw(session.conversation.data):raw;
+  if(!prev) return;
+  session.conversation.data = session.conversation.data || {};
+  goToState(prev);
 }
 
 let submitLock=false;
-function handleSubmit(){
+let _pendingConfirm=null;
+
+async function handleSubmit(){
   if(submitLock) return;
-  const raw=input.value.trim();
-  if(!raw) return;
-  const stateName=session.conversation.state;
-
-  if(stateName==='sessionComplete'){ input.value=''; return; }
-
-  if(['askSellPrice','askSellQty','confirmSell','afterSellPending'].includes(stateName)){
-    const p=computePosition();
-    if(!D.gt(p.remainingQty,'0')||sessionTargetHit()){
-      input.value=''; userSay(raw);
-      if(sessionTargetHit()) goToState('sessionComplete');
-      else{ botSay('⚠️ কোনো PEPE নেই — Sell করা সম্ভব নয়।'); goToState('afterBuyFilled'); }
-      return;
-    }
-  }
-  const st=STATES[stateName];
-  if(!st){ botSay('⚠️ Conversation state অজানা। Reset করুন।'); setInputEnabled(false); return; }
-
-  const result=st.validate(raw, session.conversation.data);
-  if(!result.ok){
-    userSay(raw); botSay('❌ '+result.msg); input.value='';
-    const q=typeof st.quick==='function'?st.quick(session.conversation.data):st.quick;
-    setInputEnabled(true, st.placeholder, q, !!st.back);
-    return;
-  }
-  submitLock=true;
-  input.disabled=true; sendBtn.disabled=true;
-  try{
-    input.value='';
+  if(input.disabled) return;
+  const raw = input.value; if(!raw.trim()) return;
+  submitLock=true; sendBtn.disabled=true;
+  try {
+    const stName = session.conversation.state;
+    const st = STATES[stName];
+    if(!st || !st.validate) return;
+    const result = st.validate(raw);
+    if(!result.ok){ botSay('⚠️ ' + result.msg); return; }
     userSay(raw);
-    session.conversation.data[st.field]=result.value;
-    let next=st.next;
-    if(typeof next==='function') next=next(result.value, session.conversation.data, result);
-    if(!session.conversation.data) session.conversation.data={};
+    const data = session.conversation.data;
+    data[st.field]=result.value;
+    const next = typeof st.next==='function'?st.next(result.value,data,result):st.next;
+    if(next === '__keep'){ input.value=''; return; }
     goToState(next);
   } finally {
-    setTimeout(()=>{ submitLock=false; },120);
+    input.value='';
+    submitLock=false;
+    const stn=STATES[session.conversation.state];
+    sendBtn.disabled=!(stn && !stn.end);
+    renderAll();
   }
-}
-
-function startConversation(){
-  if(chatHistory.length>0){
-    replayChat();
-    const stateName=session.conversation.state;
-    const st=STATES[stateName];
-    updateStepLabel();
-    if(!st||st.end||stateName==='sessionComplete'||stateName==='done'){
-      setInputEnabled(false, st&&st.placeholder?st.placeholder:'অপেক্ষা করুন...', null);
-    } else {
-      const q=typeof st.quick==='function'?st.quick(session.conversation.data):st.quick;
-      setInputEnabled(true, st.placeholder, q, !!st.back);
-    }
-    return;
-  }
-  chatBox.innerHTML=''; userScrolledUp=false;
-  const {kind,p}=getTradeState();
-
-  if(kind==='targetHit'){
-    session.conversation={state:'sessionComplete',data:{}}; persist();
-    botSay(completionMessage(p));
-    setInputEnabled(false,'Session সম্পন্ন — Reset করুন',null);
-    updateStepLabel();
-    return;
-  }
-  if(kind==='zeroNoTarget'){
-    session.conversation={state:'afterBuyFilled',data:{}}; persist();
-    botSay(`👋 Welcome back! Session #${session.id} (${session.code||''}) active.\n\n`+
-      `Total Cost: <b>${fmtU(p.totalBuyCost)} USDT</b>\n`+
-      `PEPE: <b>0</b>\n`+
-      `Realized Gross: <span class="${n(p.realizedGross)>=0?'pos':'neg'}">${fmtU(p.realizedGross)} USDT</span>\n`+
-      `Gross Return: ${fmtPct(p.sessionReturnPct)} · Net: ${fmtPct(p.sessionReturnNetPct)}\n`+
-      `Active Exit: ${activeExitLabel(p)} · Plan: ${p.planTargetPct}% Gross\n\n`+
-      `⚠️ সব PEPE বিক্রি হয়েছে কিন্তু Target পূরণ হয়নি।\n`+
-      `নতুন Buy দিয়ে Recovery শুরু করুন।`);
-    setInputEnabled(true,'buy / done',[
-      {label:'📉 নতুন Buy',value:'buy'},
-      {label:'✅ শেষ',value:'done'}
-    ]);
-    updateStepLabel();
-    return;
-  }
-  if(kind==='pending'){
-    const pend = session.orders.find(o=>o.status==='pending');
-    const stateName = pend && pend.side==='sell' ? 'afterSellPending' : 'afterPending';
-    session.conversation={state:stateName,data:{pendingOrderId: pend?pend.id:null}}; persist();
-    const st=STATES[stateName];
-    const say = typeof st.say==='function'?st.say(session.conversation.data):st.say;
-    botSay(say);
-    setInputEnabled(true, st.placeholder, st.quick, false);
-    updateStepLabel();
-    return;
-  }
-  if(kind==='inPosition'){
-    session.conversation={state:'afterBuyFilled',data:{}}; persist();
-    botSay(`👋 Welcome back! Session #${session.id} (${session.code||''}) active.\n\n`+
-      `Cost: <b>${fmtU(p.totalBuyCost)} USDT</b>\n`+
-      `PEPE: <b>${fmtQ(p.remainingQty)}</b>\n`+
-      `Gross Return: ${fmtPct(p.sessionReturnPct)} · Net: ${fmtPct(p.sessionReturnNetPct)}\n`+
-      `Active Exit: ${activeExitLabel(p)} · Plan: ${p.planTargetPct}% Gross\n`+
-      (p.targetSecured?`Sell Target: <span class="pos">secured</span>`
-                      :`Sell Target: <span class="hl">${fmtP(p.sellTarget)}</span>`)+
-      `\n\nপরবর্তী পদক্ষেপ?`);
-    const st=STATES.afterBuyFilled;
-    setInputEnabled(true, st.placeholder, st.quick, false);
-    updateStepLabel();
-    return;
-  }
-  session.conversation={state:'askBuyPrice',data:{}};
-  goToState('askBuyPrice'); persist();
-}
-
-const DASHBOARD_BUTTONS = [
-  { id:'quickExit', group:'primary',   icon:'⚡', label:'Quick Exit',    hint:'Target বদলে দ্রুত বের হোন', cls:'primary', handler:()=>onQuickExit() },
-  { id:'sell',      group:'primary',   icon:'💱', label:'Sell Record',  hint:'Sell লিপিবদ্ধ করুন',       cls:'primary', handler:()=>onSellRecord() },
-  { id:'buy',       group:'secondary', icon:'📉', label:'New Buy',      hint:'নতুন Buy শুরু করুন',       cls:'',        handler:()=>onNewBuy() },
-  { id:'settings',  group:'secondary', icon:'⚙️', label:'Settings',     hint:'Risk ও fee সেটিং',        cls:'',        handler:()=>onSettings() },
-  { id:'reset',     group:'danger',    icon:'↺', label:'Reset Session', hint:'সব ডেটা মুছে ফেলুন',       cls:'danger',  handler:()=>onReset() }
-];
-
-function renderDashboardButtons(){
-  const groups = { primary:[], secondary:[], danger:[] };
-  DASHBOARD_BUTTONS.forEach(c=>groups[c.group].push(c));
-  ['primary','secondary','danger'].forEach(g=>{
-    const container = el(g+'Actions');
-    if(!container) return;
-    container.innerHTML='';
-    groups[g].forEach(cfg=>{
-      const btn=document.createElement('button');
-      btn.type='button';
-      btn.className='dash-btn '+(cfg.cls||'');
-      btn.id='btn_'+cfg.id;
-      btn.innerHTML=`<span class="icon">${cfg.icon}</span><span class="label">${cfg.label}</span><span class="hint">${cfg.hint}</span>`;
-      btn.onclick=cfg.handler;
-      container.appendChild(btn);
-    });
-  });
-}
-
-function onQuickExit(){
-  const p=computePosition();
-  const tState=getTradeState();
-  if(tState.kind==='pending'){ toast('⚠️ Pending order আছে — আগে Fill/Cancel করুন'); return; }
-  if(tState.kind==='targetHit'){
-    openChat(); userScrolledUp=false;
-    botSay(completionMessage(p));
-    session.conversation={state:'sessionComplete',data:{}}; persist();
-    setInputEnabled(false,'Session সম্পন্ন — Reset করুন',null);
-    updateStepLabel();
-    return;
-  }
-  if(!D.gt(p.remainingQty,'0')){ toast('⚠️ কোনো PEPE নেই — Quick Exit সেট করা সম্ভব নয়'); return; }
-  openChat(); userScrolledUp=false;
-  session.conversation={state:'chooseExitPlan',data:{}};
-  goToState('chooseExitPlan');
-}
-
-function onSellRecord(){
-  const p=computePosition();
-  const tState=getTradeState();
-  if(tState.kind==='pending'){
-    toast('⚠️ Pending order আছে — আগে Fill/Cancel করুন');
-    openChat();
-    const pend = session.orders.find(o=>o.status==='pending');
-    const stateName = pend.side==='sell' ? 'afterSellPending' : 'afterPending';
-    session.conversation = { state:stateName, data:{ pendingOrderId: pend.id } };
-    persist();
-    const st=STATES[stateName];
-    const say = typeof st.say==='function'?st.say(session.conversation.data):st.say;
-    botSay(say);
-    setInputEnabled(true, st.placeholder, st.quick, false);
-    updateStepLabel();
-    return;
-  }
-  if(tState.kind==='targetHit'){
-    openChat(); userScrolledUp=false;
-    botSay(completionMessage(p));
-    session.conversation={state:'sessionComplete',data:{}}; persist();
-    setInputEnabled(false,'Session সম্পন্ন — Reset করুন',null);
-    updateStepLabel();
-    return;
-  }
-  if(!D.gt(p.remainingQty,'0')){
-    toast('⚠️ কোনো PEPE নেই — Sell করা সম্ভব নয়');
-    openChat(); userScrolledUp=false;
-    botSay(`⚠️ বর্তমানে কোনো PEPE নেই।\n\nTotal Cost: ${fmtU(p.totalBuyCost)} USDT\nRealized Gross: ${fmtU(p.realizedGross)} USDT (${fmtPct(p.sessionReturnPct)})\nActive Exit: ${activeExitLabel(p)} · Plan: ${p.planTargetPct}% Gross\n\nনতুন Sell করতে হলে প্রথমে Buy করুন।`);
-    session.conversation={state:'afterBuyFilled',data:{}}; persist();
-    setInputEnabled(true,'buy / done',[
-      {label:'📉 নতুন Buy',value:'buy'},
-      {label:'✅ শেষ',value:'done'}
-    ]);
-    updateStepLabel();
-    return;
-  }
-  openChat(); userScrolledUp=false;
-  botSay(`💱 <b>Sell / Record Sell</b>\n\n`+
-    `Remaining: <b>${fmtQFull(p.remainingQty)} PEPE</b>\n`+
-    (p.targetSecured?`Target: <span class="pos">secured</span> — যেকোনো valid price দিন।`
-                    :`Suggested Sell Target: <span class="hl">${fmtP(p.sellTarget)} USDT</span>`)+
-    `\nActive Exit: ${activeExitLabel(p)} · Plan: ${p.planTargetPct}% Gross · Est. Sell Fee: ${settings.feePct||0}%\n\n`+
-    `MEXC-এ যেই price-এ sell করতে চান সেটি দিন।`);
-  session.conversation={state:'askSellPrice',data:{}}; persist();
-  goToState('askSellPrice');
-}
-
-function onNewBuy(){
-  const tState=getTradeState();
-  if(tState.kind==='pending'){
-    toast('⚠️ Pending order আছে — আগে Fill/Cancel করুন');
-    openChat();
-    const pend = session.orders.find(o=>o.status==='pending');
-    const stateName = pend.side==='sell'?'afterSellPending':'afterPending';
-    session.conversation={state:stateName,data:{pendingOrderId:pend.id}};
-    persist();
-    goToState(stateName);
-    return;
-  }
-  if(tState.kind==='targetHit'){
-    openChat(); userScrolledUp=false;
-    botSay(completionMessage(tState.p));
-    session.conversation={state:'sessionComplete',data:{}}; persist();
-    setInputEnabled(false,'Session সম্পন্ন — Reset করুন',null);
-    updateStepLabel();
-    return;
-  }
-  openChat(); userScrolledUp=false;
-  session.conversation={state:'askBuyPrice',data:{}};
-  persist();
-  goToState('askBuyPrice');
-}
-
-function onSettings(){
-  el('setMaxInv').value=settings.maxInv||'';
-  el('setMaxBuys').value=settings.maxBuys||'';
-  el('setFee').value=settings.feePct||'';
-  el('settingsModal').classList.add('show');
-}
-
-function onReset(){
-  confirmDialog('সব ডেটা রিসেট করবেন?',
-    'বর্তমান Session-এর সব order, holdings, P/L, target এবং সম্পূর্ণ চ্যাট হিস্ট্রি মুছে যাবে এবং নতুন করে Session শুরু হবে। এটি আর ফিরিয়ে আনা যাবে না।',
-    async ()=>{
-      if(document.activeElement===input) input.blur();
-      await store.del('session'); await clearChat();
-      session=newSession(1); orderSeq=1;
-      await persist();
-      chatBox.innerHTML=''; userScrolledUp=false;
-      renderAll(); startConversation();
-      toast('✅ Reset সম্পন্ন — নতুন Session');
-    });
-}
-
-function renderAll(){
-  renderDashboard();
-  renderOrders();
-  renderPendingBanner();
-  el('sessionTag').textContent = 'Session #'+session.id;
-}
-
-function renderDashboard(){
-  const p=computePosition();
-  const tState=getTradeState();
-  const badge=el('statusBadge');
-  let status='Ready to Start', cls='b-ready';
-  if(tState.kind==='targetHit'){
-    status = p.exitTargetKind==='quick' ? 'Quick Exit Completed' : 'Target Achieved';
-    cls='b-done';
-  }
-  else if(tState.kind==='pending'){ status='Order Pending'; cls='b-pend'; }
-  else if(tState.kind==='zeroNoTarget'){ status='Loss Recovery'; cls='b-rec'; }
-  else if(tState.kind==='inPosition'){
-    if(n(p.realizedGross)<0){ status='Recovery Mode'; cls='b-rec'; }
-    else { status='In Position'; cls='b-buy'; }
-  }
-  badge.textContent=status; badge.className='badge '+cls;
-
-  el('sSellTarget').textContent = !D.gt(p.remainingQty,'0') ? '—'
-    : p.targetSecured ? 'Secured ✅' : fmtP(p.sellTarget)+' USDT';
-  el('sCost').textContent=fmtU(p.totalBuyCost);
-  el('sQty').textContent=fmtQFull(p.remainingQty);
-
-  const upl=el('sUpl');
-  if(p.hasPrice && D.gt(p.remainingQty,'0')){
-    upl.textContent=(n(p.unrealized)>=0?'+':'')+fmtU(p.unrealized)+' USDT';
-    upl.className='v '+(n(p.unrealized)>=0?'pos':'neg');
-  } else { upl.textContent='—'; upl.className='v'; }
-
-  const rpl=el('sRpl');
-  rpl.textContent=fmtU(p.realizedGross);
-  rpl.className='v '+(n(p.realizedGross)>=0?'pos':'neg');
-
-  el('sPlanTargetPct').textContent=p.planTargetPct+'%';
-  el('sTargetPct').textContent=p.targetPct+'%';
-  el('sTargetMode').textContent=exitModeLabel(p.exitTargetMode)+(p.exitTargetKind==='quick'?' · Quick':'');
-  const rpp=el('sRplPct');
-  rpp.textContent=fmtPct(p.realizedPct_onSold);
-  rpp.className='v '+(n(p.realizedPct_onSold)>=0?'pos':'neg');
-
-  el('sRecovery').textContent = D.gt(p.targetReturnTotal,'0')
-    ? `${p.progress.toFixed(1)}% (${fmtU(p.historicalEffectiveProceeds)} / ${fmtU(p.targetReturnTotal)})` : '—';
-  el('recBar').style.width=Math.min(100,p.progress)+'%';
-
-  const wa=el('warnArea'); let html='';
-  if(tState.kind==='zeroNoTarget')
-    html+='<div class="danger-msg">⚠️ Position শূন্য কিন্তু Target পূরণ হয়নি। নতুন Buy plan করুন।</div>';
-  if(tState.kind==='targetHit')
-    html+='<div class="warn" style="background:#123a24;border-left-color:#22c55e;color:#4ade80">'+(p.exitTargetKind==='quick'?'⚡ Quick Exit Completed!':'🎉 Target Achieved!')+' Reset করে নতুন Session শুরু করুন।</div>';
-  if(settings.maxInv>0 && n(p.totalBuyCost)>=settings.maxInv*0.95)
-    html+='<div class="warn">⚠️ Max Investment সীমার কাছাকাছি ('+fmtU(settings.maxInv)+' USDT)।</div>';
-  if(settings.maxBuys>0){
-    const cnt=session.orders.filter(o=>o.side==='buy'&&(o.status==='filled'||o.status==='partial')).length;
-    if(cnt>=settings.maxBuys)
-      html+='<div class="warn">⚠️ Max Buy Orders সীমায় পৌঁছেছেন ('+settings.maxBuys+')।</div>';
-  }
-  wa.innerHTML=html;
-}
-
-function renderPendingBanner(){
-  const wrap=el('pendingBannerWrap');
-  if(!wrap) return;
-  const pend = session.orders.find(o=>o.status==='pending');
-  if(!pend){ wrap.innerHTML=''; return; }
-  wrap.innerHTML=`<div class="pending-banner">
-    <span>⏳ <b>Pending ${pend.side==='buy'?'BUY':'SELL'}</b> — ${pend.id} @ ${fmtP(pend.price)}</span>
-    <button id="pendingBannerBtn" type="button">দেখুন</button>
-  </div>`;
-  const b=el('pendingBannerBtn');
-  if(b) b.onclick=()=>openHistoryModal();
 }
 
 function renderOrders(){
   const box=el('ordersList');
-  el('orderCount').textContent=session.orders.length;
-  if(session.orders.length===0){ box.innerHTML='<div class="empty">এখনো কোনো order নেই</div>'; return; }
+  const n=session.orders.length;
+  el('orderCount').textContent=String(n);
+  if(!n){ box.innerHTML='<div class="empty">এখনো কোনো order নেই</div>'; return; }
   box.innerHTML='';
   [...session.orders].reverse().forEach(o=>{
-    const d=document.createElement('div'); d.className='hist-item';
-    const side=o.side==='buy'?'🟢 BUY':'🔴 SELL';
-    const st=o.status;
-    const badgeCls = st==='filled'?'b-win':st==='pending'?'b-pend':st==='cancelled'?'b-rec':st==='partial'?'b-buy':'b-ready';
-    let actions='';
+    const div=document.createElement('div'); div.className='hist-item';
+    const left=document.createElement('div');
+    const badge=o.side==='buy'?'b-buy':o.status==='pending'?'b-pend':'b-done';
+    left.innerHTML=`<span class="badge ${badge}">${o.side.toUpperCase()}</span> ${fmtQ(o.filledQty)}/${fmtQ(o.qty)} PEPE<br><span class="t">${fmtP(o.price)} @ ${new Date(o.ts).toLocaleString()}</span>`;
+    const right=document.createElement('div');
+    right.style.cssText='text-align:right;flex-shrink:0';
+    const statusCls = o.status==='filled'?'pos':o.status==='pending'?'gold':'neg';
+    right.innerHTML=`<div style="font-weight:700" class="${statusCls}">${o.status.toUpperCase()}</div><div class="t">${fmtU(o.filledUsdt)} USDT</div>`;
     if(o.status==='pending'){
-      actions = `<button data-fill="${o.id}" style="font-size:10px;padding:4px 8px;border-radius:8px;border:1px solid #14301f;background:#0c1c13;color:#86efac;cursor:pointer;margin-right:4px">Fill…</button>
-                 <button data-cancel="${o.id}" style="font-size:10px;padding:4px 8px;border-radius:8px;border:1px solid #3a1a1a;background:#1c0f0f;color:#fca5a5;cursor:pointer">Cancel</button>`;
-    } else if(o.status==='partial'){
-      actions = `<button data-fill="${o.id}" style="font-size:10px;padding:4px 8px;border-radius:8px;border:1px solid #14301f;background:#0c1c13;color:#86efac;cursor:pointer">Add fill…</button>`;
+      const btn=document.createElement('button'); btn.className='mini-btn'; btn.style.marginTop='4px'; btn.textContent='Fill';
+      btn.onclick=()=>openFillModal(o.id);
+      const cancel=document.createElement('button'); cancel.className='mini-btn'; cancel.style.margin='4px 0 0 4px'; cancel.textContent='Cancel';
+      cancel.onclick=()=>confirmAction('Cancel Order?','Are you sure?',()=>{ cancelOrder(o.id); renderAll(); });
+      right.appendChild(btn); right.appendChild(cancel);
     }
-    const filledRow=(o.status==='filled'||o.status==='partial')
-      ?`<div class="t">Filled: ${fmtU(o.filledUsdt)} USDT · ${fmtQFull(o.filledQty)} PEPE @ ${fmtP(o.fillPrice)}</div>`:'';
-    d.innerHTML=`<div style="flex:1;min-width:0">
-      <div><b>${side}</b> @ ${fmtP(o.price)} <span class="badge ${badgeCls}">${st}</span></div>
-      <div class="t">Plan: ${fmtU(o.usdt)} USDT · ${fmtQFull(o.qty)} PEPE</div>
-      ${filledRow}
-    </div>
-    <div style="display:flex;flex-direction:column;gap:4px;align-items:flex-end;flex-shrink:0">${actions}</div>`;
-    box.appendChild(d);
+    div.appendChild(left); div.appendChild(right); box.appendChild(div);
   });
-  box.querySelectorAll('[data-fill]').forEach(b=>{ b.onclick=()=>openFillModal(b.getAttribute('data-fill')); });
-  box.querySelectorAll('[data-cancel]').forEach(b=>{ b.onclick=()=>{
-    confirmDialog('Order cancel করবেন?','এই order টি cancel করা হবে — পরে আর fill করা যাবে না।',()=>{
-      cancelOrder(b.getAttribute('data-cancel'));
-    });
-  };});
 }
 
-let toastT;
+function renderPendingBanner(){
+  const wrap = el('pendingBannerWrap');
+  const pend = session.orders.find(o=>o.status==='pending');
+  if(!pend){ wrap.innerHTML=''; return; }
+  const banner = document.createElement('div');
+  banner.className='pending-banner';
+  banner.innerHTML = `<div><b>Pending:</b> ${pend.side.toUpperCase()} ${fmtQ(pend.qty)} PEPE @ ${fmtP(pend.price)}</div><button type="button">Fill / Cancel</button>`;
+  banner.querySelector('button').onclick = ()=>openFillModal(pend.id);
+  wrap.innerHTML='';
+  wrap.appendChild(banner);
+}
+
+function renderActions(){
+  const boxP=el('primaryActions'), boxS=el('secondaryActions'), boxD=el('dangerActions');
+  boxP.innerHTML=''; boxS.innerHTML=''; boxD.innerHTML='';
+  const p=computePosition();
+  const mk=(label, hint, icon, cb, cls)=>{
+    const b=document.createElement('button'); b.type='button'; b.className='dash-btn '+(cls||'');
+    b.innerHTML=`<span class="icon">${icon}</span><span class="label">${label}</span>${hint?`<span class="hint">${hint}</span>`:''}`;
+    b.onclick=cb; return b;
+  };
+  boxP.appendChild(mk('Buy', 'নতুন buy plan', '📉', ()=>{ if(session.conversation.state!=='askBuyPrice') goToState('askBuyPrice'); showChat(); },'primary'));
+  if(D.gt(p.remainingQty,'0')){
+    boxP.appendChild(mk('Sell', 'record or plan sell', '💱', ()=>{ if(sellBlocked().blocked) return; if(session.conversation.state!=='askSellPrice') goToState('askSellPrice'); showChat(); },'primary'));
+    boxS.appendChild(mk('Quick Exit', 'net target', '⚡', ()=>{ if(session.conversation.state!=='chooseExitPlan') goToState('chooseExitPlan'); showChat(); }));
+  }
+  boxS.appendChild(mk('Settings', 'risk & fee', '⚙', openSettings));
+  boxS.appendChild(mk('History', 'session summary', '📊', openHistory));
+  boxD.appendChild(mk('Reset Session', 'সব ডেটা মুছে ফেলুন', '🔄', onReset, 'danger'));
+}
+
+function renderDashboard(){
+  const p=computePosition();
+  el('sCost').textContent=fmtU(p.totalBuyCost);
+  el('sQty').textContent=fmtQFull(p.remainingQty);
+  el('sRpl').textContent=fmtU(p.realizedGross);
+  el('sRpl').className='v '+(n(p.realizedGross)>=0?'pos':'neg');
+  el('sRplPct').textContent=fmtPct(p.realizedPct_onSold);
+  el('sPlanTargetPct').textContent=`${p.planTargetPct}%`;
+  el('sTargetPct').textContent=`${p.targetPct}%`;
+  el('sTargetMode').textContent=exitModeLabel(p.exitTargetMode);
+  el('sSellTarget').textContent=p.targetSecured?'Target Secured':fmtP(p.sellTarget);
+  el('sRecovery').textContent=`${n(p.progress).toFixed(1)}%`;
+  el('recBar').style.width=`${p.progress}%`;
+  if(p.hasPrice){
+    el('sUpl').textContent=fmtU(p.unrealized);
+    el('sUpl').className='v '+(n(p.unrealized)>=0?'pos':'neg');
+  } else { el('sUpl').textContent='—'; el('sUpl').className='v mut'; }
+  const trade=getTradeState();
+  const badge=el('statusBadge');
+  const map={empty:['Ready to Start','b-ready'],pending:['Order Pending','b-pend'],targetHit:['Target Achieved','b-win'],zeroNoTarget:['Position Closed','b-rec'],inPosition:['In Position','b-buy']};
+  const [txt,cls]=map[trade.kind]||map.empty;
+  badge.textContent=txt; badge.className='badge '+cls;
+  const wa=el('warnArea'); wa.innerHTML='';
+  if(trade.kind==='zeroNoTarget'){
+    wa.innerHTML=`<div class="warn">⚠️ সব PEPE বিক্রি হয়েছে কিন্তু Target পূরণ হয়নি — Loss Recovery Mode.</div>`;
+  } else if(p.hasPrice && D.gt(p.totalBuyCost,'0') && D.lt(p.unrealized,'0')){
+    wa.innerHTML=`<div class="warn">⚠️ Unrealized P/L negative। লস কাটাতে target price ${fmtP(p.breakEven)} এর উপরে রাখুন।</div>`;
+  }
+}
+
+function renderAll(){
+  renderOrders();
+  renderPendingBanner();
+  renderActions();
+  renderDashboard();
+}
+
+function showChat(){
+  el('chatwin').classList.add('open');
+  el('fab').classList.add('hidden');
+  userScrolledUp=false;
+  replayChat();
+  resumeCurrentStateUI();
+  setTimeout(()=>{ try{input.focus();}catch(e){} }, 250);
+}
+function closeChat(){
+  el('chatwin').classList.remove('open');
+  el('fab').classList.remove('hidden');
+  try{input.blur();}catch(e){}
+  try{history.pushState({chatClosed:true},'',location.href);}catch(e){}
+}
 function toast(msg){
   const t=el('toast'); t.textContent=msg; t.classList.add('show');
-  clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove('show'),2200);
+  clearTimeout(toast._h); toast._h=setTimeout(()=>t.classList.remove('show'),2200);
 }
-function confirmDialog(title,msg,onOk){
+
+function confirmAction(title,msg,onOk){
   el('cfTitle').textContent=title; el('cfMsg').textContent=msg;
-  const modal=el('confirmModal'); modal.classList.add('show');
-  const ok=el('cfOk'), cancel=el('cfCancel');
-  const cleanup=()=>{ modal.classList.remove('show'); ok.onclick=null; cancel.onclick=null; };
-  ok.onclick=()=>{ cleanup(); onOk(); }; cancel.onclick=cleanup;
+  el('confirmModal').classList.add('show');
+  _pendingConfirm=onOk;
+}
+function hideConfirm(){ el('confirmModal').classList.remove('show'); _pendingConfirm=null; }
+
+async function copyToClipboard(text){
+  try {
+    if(navigator.clipboard && window.isSecureContext){ await navigator.clipboard.writeText(text); return true; }
+  } catch(e){}
+  try{
+    const ta=document.createElement('textarea'); ta.value=text; ta.style.cssText='position:fixed;left:-9999px'; document.body.appendChild(ta); ta.select();
+    const ok=document.execCommand('copy'); document.body.removeChild(ta); return ok;
+  }catch(e){ return false; }
+}
+async function shareOrDownloadJSON(){
+  const data={session,settings,chatHistory:chatHistory.length,ts:new Date().toISOString()};
+  const str=JSON.stringify(data,null,2);
+  const fname=`pepe-session-${session.id}.json`;
+  if(navigator.share){
+    try{ await navigator.share({title:'PEPE Session', text: str}); return; }catch(e){ if(e.name==='AbortError') return; }
+  }
+  const blob=new Blob([str],{type:'application/json'});
+  const url=URL.createObjectURL(blob); const a=document.createElement('a');
+  a.href=url; a.download=fname; a.click();
+  setTimeout(()=>URL.revokeObjectURL(url),3000);
+  toast('📥 Exported');
 }
 
-let fillCtx = null;
-const FILL_PERCENTS = [100,75,50,25,'custom'];
-let fillSelectedPct = 100;
-
-function openFillModal(orderId){
-  const o = session.orders.find(x=>x.id===orderId);
+let fillOrderId=null;
+function openFillModal(id){
+  const o=session.orders.find(x=>x.id===id);
   if(!o){ toast('⚠️ Order পাওয়া যায়নি'); return; }
-  const planQtyLeft = D.sub(o.qty||'0', o.filledQty||'0');
-  const planUsdtLeft = D.sub(o.usdt||'0', o.filledUsdt||'0');
-  fillCtx = { orderId, side:o.side, price:o.price, planQtyLeft, planUsdtLeft, order:o };
-  fillSelectedPct = 100;
-  el('fmTitle').textContent = (o.status==='partial'?'Add fill — ':'Fill — ')+o.id;
-  const alreadyRow = (o.status==='partial'||o.status==='filled')
-    ? `<br>Already filled: ${fmtU(o.filledUsdt)} USDT · ${fmtQFull(o.filledQty)} PEPE`
-    : '';
-  el('fmInfo').innerHTML =
-    `<b>${o.side==='buy'?'🟢 BUY':'🔴 SELL'}</b> @ ${fmtP(o.price)}<br>` +
-    `Plan: ${fmtU(o.usdt)} USDT · ${fmtQFull(o.qty)} PEPE` + alreadyRow;
-  el('fmRemaining').innerHTML =
-    `<b>Remaining to fill:</b><br>${fmtU(planUsdtLeft)} USDT · ${fmtQFull(planQtyLeft)} PEPE`;
-  renderFillQuickBtns();
-  applyFillPercent(100);
+  fillOrderId=id;
+  const remQty=D.sub(o.qty||'0',o.filledQty||'0');
+  const remUsdt=D.sub(o.usdt||'0',o.filledUsdt||'0');
+  el('fmTitle').textContent=`${o.side.toUpperCase()} ${o.id} — Fill Order`;
+  el('fmInfo').innerHTML=`Planned: ${fmtQ(o.qty)} PEPE @ ${fmtP(o.price)}<br>Filled: ${fmtQ(o.filledQty)} PEPE · ${fmtU(o.filledUsdt)} USDT`;
+  el('fmRemaining').innerHTML=`<b>Remaining:</b> ${fmtQFull(remQty)} PEPE · ${fmtU(remUsdt)} USDT`;
+  el('fmQty').value=''; el('fmUsdt').value=''; el('fmPreview').innerHTML='';
+  const quickBox=el('fmQuickBtns'); quickBox.innerHTML='';
+  [100,75,50,25].forEach(pct=>{
+    const b=document.createElement('button'); b.type='button'; b.textContent=`${pct}%`;
+    b.onclick=()=>{
+      quickBox.querySelectorAll('button').forEach(x=>x.classList.remove('active'));
+      b.classList.add('active');
+      const q = D.mul(remQty, D.div(String(pct),'100',18));
+      const u = D.mul(remUsdt, D.div(String(pct),'100',18));
+      el('fmQty').value=floorQty(q); el('fmUsdt').value=u;
+      renderFillPreview();
+    };
+    quickBox.appendChild(b);
+  });
+  ['fmQty','fmUsdt'].forEach(id=>{
+    const elem=el(id); if(elem) elem.oninput=renderFillPreview;
+  });
   el('fillModal').classList.add('show');
 }
-
-function renderFillQuickBtns(){
-  const box = el('fmQuickBtns');
-  box.innerHTML='';
-  FILL_PERCENTS.forEach(pct=>{
-    const btn = document.createElement('button');
-    btn.type='button';
-    btn.textContent = pct==='custom' ? '✍ Custom' : pct+'%';
-    btn.dataset.pct = pct;
-    if(pct===fillSelectedPct) btn.classList.add('active');
-    btn.onclick = ()=>{
-      fillSelectedPct = pct;
-      box.querySelectorAll('button').forEach(b=>b.classList.remove('active'));
-      btn.classList.add('active');
-      if(pct==='custom'){
-        el('fmQty').value='';
-        el('fmUsdt').value='';
-        updateFillPreview();
-        el('fmQty').focus();
-        return;
-      }
-      applyFillPercent(pct);
-    };
-    box.appendChild(btn);
-  });
+function renderFillPreview(){
+  const qty=el('fmQty').value, usdt=el('fmUsdt').value, prev=el('fmPreview');
+  if(!qty || !usdt){ prev.innerHTML=''; return; }
+  try{
+    const price=D.div(usdt,qty,18);
+    prev.innerHTML=`⚡ Effective Fill Price: <b>${fmtP(price)} USDT</b>`;
+  }catch(e){ prev.innerHTML=''; }
+}
+function closeFillModal(){ el('fillModal').classList.remove('show'); fillOrderId=null; }
+function saveFillModal(){
+  if(!fillOrderId){ closeFillModal(); return; }
+  const qty=el('fmQty').value, usdt=el('fmUsdt').value;
+  if(!qty || !usdt){ toast('⚠️ Qty এবং USDT দিন'); return; }
+  if(fillOrder(fillOrderId, qty, usdt, false)){
+    closeFillModal();
+  }
 }
 
-function applyFillPercent(pct){
-  if(!fillCtx) return;
-  const ratio = D.div(String(pct),'100',18);
-  const qty = floorQty(D.mul(fillCtx.planQtyLeft, ratio));
-  const usdt = D.mul(fillCtx.planUsdtLeft, ratio);
-  el('fmQty').value = qty;
-  el('fmUsdt').value = usdt;
-  updateFillPreview();
-}
-
-function updateFillPreview(){
-  if(!fillCtx) return;
-  const o = fillCtx.order;
-  const q = el('fmQty').value.trim();
-  const u = el('fmUsdt').value.trim();
-  const qN = parseUSDT(q), uN = parseUSDT(u);
-  if(qN===null && uN===null){ el('fmPreview').innerHTML=''; return; }
-
-  let newFillQty='0', newFillUsdt='0';
-  if(qN!==null && n(q)>0){
-    newFillQty = floorQty(q);
-    if(uN!==null && n(u)>=0) newFillUsdt = String(u);
-    else newFillUsdt = D.mul(newFillQty, fillCtx.price);
-  } else if(uN!==null && n(u)>0){
-    newFillUsdt = String(u);
-    newFillQty = floorQty(D.div(newFillUsdt, fillCtx.price, 18));
-  }
-
-  const cumQty = D.add(o.filledQty||'0', newFillQty);
-  const cumUsdt = D.add(o.filledUsdt||'0', newFillUsdt);
-  const avg = D.gt(cumQty,'0') ? D.div(cumUsdt, cumQty, 18) : '0';
-
-  let line1, line2;
-  if(fillCtx.side==='buy'){
-    line1 = `📊 After this fill: <b>${fmtU(cumUsdt)} USDT</b> cost · <b>${fmtQFull(cumQty)} PEPE</b>`;
-    line2 = `New avg buy: <b>${fmtP(avg)}</b>`;
-  } else {
-    line1 = `📊 After this fill: <b>${fmtU(cumUsdt)} USDT</b> proceeds · <b>${fmtQFull(cumQty)} PEPE</b>`;
-    line2 = `Avg sell price: <b>${fmtP(avg)}</b>`;
-  }
-  el('fmPreview').innerHTML = line1 + '<br>' + line2;
-}
-
-el('fmQty').addEventListener('input', ()=>{
-  if(!fillCtx) return;
-  const q = el('fmQty').value.trim();
-  const qN = parseUSDT(q);
-  if(qN!==null && n(q)>0){
-    el('fmUsdt').value = D.mul(floorQty(q), fillCtx.price);
-  }
-  updateFillPreview();
-});
-el('fmUsdt').addEventListener('input', ()=>{
-  if(!fillCtx) return;
-  const u = el('fmUsdt').value.trim();
-  const uN = parseUSDT(u);
-  if(uN!==null && n(u)>0){
-    el('fmQty').value = floorQty(D.div(u, fillCtx.price, 18));
-  }
-  updateFillPreview();
-});
-
-el('fmCancel').addEventListener('click', ()=>{
-  el('fillModal').classList.remove('show');
-  fillCtx = null;
-});
-el('fmSave').addEventListener('click', ()=>{
-  if(!fillCtx){ el('fillModal').classList.remove('show'); return; }
-  const q = el('fmQty').value.trim();
-  const u = el('fmUsdt').value.trim();
-  if(parseUSDT(q)===null || n(q)<=0){ toast('⚠️ সঠিক filled quantity দিন'); return; }
-  if(parseUSDT(u)===null || n(u)<0){ toast('⚠️ সঠিক USDT দিন'); return; }
-  const id = fillCtx.orderId;
-  fillCtx = null;
-  el('fillModal').classList.remove('show');
-  fillOrder(id, q, u);
-});
-
-/* ═══ History modal + export ═══ */
-function openHistoryModal(){
-  const p = computePosition();
-  let html = `<div class="hist-summary">
-    <div class="row"><span>Session</span><span>#${session.id} (${session.code||''})</span></div>
-    <div class="row"><span>Total Orders</span><span>${session.orders.length}</span></div>
-    <div class="row"><span>Total Buy Cost</span><span>${fmtU(p.totalBuyCost)} USDT</span></div>
-    <div class="row"><span>Total Sell Proceeds</span><span>${fmtU(p.totalSellProceeds)} USDT</span></div>
-    <div class="row"><span>Remaining PEPE</span><span>${fmtQFull(p.remainingQty)}</span></div>
-    <div class="row"><span>Realized Gross</span><span class="${n(p.realizedGross)>=0?'pos':'neg'}">${fmtU(p.realizedGross)} USDT</span></div>
-    <div class="row"><span>Realized Net (est.)</span><span class="${n(p.realizedNet)>=0?'pos':'neg'}">${fmtU(p.realizedNet)} USDT</span></div>
-    <div class="row"><span>Plan Target</span><span>${p.planTargetPct}%</span></div>
-    <div class="row"><span>Active Exit</span><span>${p.targetPct}% ${p.exitTargetMode==='net'?'Net':'Gross'}</span></div>
-  </div>
-  <div style="font-size:12px;color:#93b4e0;font-weight:700;margin:6px 0">All Orders</div>`;
-
-  if(session.orders.length===0){
-    html += '<div class="empty">কোনো order নেই</div>';
-  } else {
-    [...session.orders].reverse().forEach(o=>{
-      const side = o.side==='buy'?'🟢 BUY':'🔴 SELL';
-      const badgeCls = o.status==='filled'?'b-win':o.status==='pending'?'b-pend':o.status==='cancelled'?'b-rec':o.status==='partial'?'b-buy':'b-ready';
-      const d = new Date(o.ts);
-      const timeStr = d.toLocaleDateString()+' '+d.toLocaleTimeString();
-      html += `<div class="hist-item" style="flex-direction:column;align-items:stretch;gap:3px">
-        <div style="display:flex;justify-content:space-between">
-          <span><b>${o.id}</b> ${side} @ ${fmtP(o.price)}</span>
-          <span class="badge ${badgeCls}">${o.status}</span>
-        </div>
-        <div class="t">Plan: ${fmtU(o.usdt)} USDT · ${fmtQFull(o.qty)} PEPE</div>
-        ${(o.status==='filled'||o.status==='partial')
-          ? `<div class="t" style="color:#7dd3fc">Filled: ${fmtU(o.filledUsdt)} USDT · ${fmtQFull(o.filledQty)} PEPE @ ${fmtP(o.fillPrice)}</div>`
-          : ''}
-        <div class="t">${timeStr}</div>
-      </div>`;
-    });
-  }
+function openHistory(){
+  const p=computePosition();
+  const html = `
+    <div class="hist-summary">
+      <div class="row"><span>Session</span><span>#${session.id}</span></div>
+      <div class="row"><span>Total Buy Cost</span><span>${fmtU(p.totalBuyCost)} USDT</span></div>
+      <div class="row"><span>PEPE Holdings</span><span>${fmtQFull(p.remainingQty)}</span></div>
+      <div class="row"><span>Avg Buy</span><span>${fmtP(p.avgBuy)}</span></div>
+      <div class="row"><span>Break-even</span><span>${fmtP(p.breakEven)}</span></div>
+      <div class="row"><span>Realized Gross</span><span class="${n(p.realizedGross)>=0?'pos':'neg'}">${fmtU(p.realizedGross)} USDT</span></div>
+      <div class="row"><span>Est. Sell Fee</span><span>${fmtU(p.feeEstimate)} USDT</span></div>
+      <div class="row"><span>Realized Net (est.)</span><span class="${n(p.realizedNet)>=0?'pos':'neg'}">${fmtU(p.realizedNet)} USDT</span></div>
+      <div class="row"><span>Realized % (on sold basis)</span><span>${fmtPct(p.realizedPct_onSold)}</span></div>
+      <div class="row"><span>Gross Session Return</span><span>${fmtPct(p.sessionReturnPct)}</span></div>
+      <div class="row"><span>Net Session Return (est.)</span><span>${fmtPct(p.sessionReturnNetPct)}</span></div>
+    </div>
+  `;
   el('historyContent').innerHTML = html;
   el('historyModal').classList.add('show');
 }
+function closeHistory(){ el('historyModal').classList.remove('show'); }
 
-async function copyToClipboard(text){
-  try{
-    if(navigator.clipboard && navigator.clipboard.writeText){
-      await navigator.clipboard.writeText(text);
-      return true;
-    }
-  }catch(e){}
-  try{
-    const ta=document.createElement('textarea');
-    ta.value=text; ta.style.position='fixed'; ta.style.opacity='0';
-    document.body.appendChild(ta); ta.select();
-    const ok=document.execCommand('copy');
-    document.body.removeChild(ta);
-    return ok;
-  }catch(e){ return false; }
+function openSettings(){
+  el('setMaxInv').value=settings.maxInv||'';
+  el('setMaxBuys').value=settings.maxBuys||'';
+  el('setFee').value = String(settings.feePct === 0 || settings.feePct === '0' || settings.feePct === '' ? '' : settings.feePct);
+  el('settingsModal').classList.add('show');
 }
-
-async function exportSessionJSON(){
-  const data = {
-    version:'9.1',
-    exportedAt:new Date().toISOString(),
-    session: session,
-    settings: settings
-  };
-  const json = JSON.stringify(data, null, 2);
-  const ok = await copyToClipboard(json);
-  if(ok) toast('📥 Session JSON copied to clipboard');
-  else {
-    try{
-      const blob = new Blob([json], {type:'application/json'});
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href=url; a.download='pepe-session-'+session.id+'.json';
-      document.body.appendChild(a); a.click();
-      document.body.removeChild(a);
-      setTimeout(()=>URL.revokeObjectURL(url), 1000);
-      toast('📥 Session JSON downloaded');
-    }catch(e){ toast('⚠️ Export failed'); }
+function closeSettings(){ el('settingsModal').classList.remove('show'); }
+function saveSettings(){
+  const maxInv = parseUSDT(el('setMaxInv').value);
+  const maxBuys = parseUSDT(el('setMaxBuys').value);
+  const feeStr = el('setFee').value.trim();
+  let fee;
+  if(feeStr==='') {
+    fee = 0;
+  } else {
+    fee = parseUSDT(feeStr);
+    if(fee === null || n(fee) > 100) { toast('⚠️ Invalid fee'); return; }
   }
-}
-
-el('histClose').addEventListener('click', ()=>el('historyModal').classList.remove('show'));
-el('histExport').addEventListener('click', exportSessionJSON);
-el('btnHistory').addEventListener('click', openHistoryModal);
-
-el('setCancel').addEventListener('click', ()=>el('settingsModal').classList.remove('show'));
-el('setExport').addEventListener('click', exportSessionJSON);
-el('setSave').addEventListener('click', async ()=>{
-  const mi=Number(el('setMaxInv').value)||0;
-  const mb=Number(el('setMaxBuys').value)||0;
-  const fp=Number(el('setFee').value)||0;
-  settings.maxInv=Math.max(0,mi);
-  settings.maxBuys=Math.max(0,Math.floor(mb));
-  settings.feePct=Math.max(0,Math.min(10,fp));
-  await persist();
-  el('settingsModal').classList.remove('show');
-  renderDashboard();
-  renderCalc();
-  toast('✅ Settings সেভ হয়েছে');
-});
-
-sendBtn.addEventListener('click', handleSubmit);
-input.addEventListener('keydown', e=>{
-  if(e.key==='Enter' && !e.isComposing && !e.shiftKey){
-    e.preventDefault(); handleSubmit();
-  }
-});
-
-el('stepRestart').addEventListener('click', ()=>{
-  const st = STATES[session.conversation.state];
-  if(!st || st.end || session.conversation.state==='sessionComplete'){
-    toast('⚠️ এই ধাপ restart করা যাবে না');
-    return;
-  }
-  if(submitLock) return;
-  const curField = st.field;
-  if(curField && curField!=='_fill' && curField!=='_go' && session.conversation.data[curField]!==undefined){
-    delete session.conversation.data[curField];
-  }
-  input.value='';
-  goToState(session.conversation.state);
-  toast('🔄 ধাপটি আবার শুরু হয়েছে');
-});
-
-const fab=el('fab'), chatwin=el('chatwin');
-let isOpen=false, dragState=null, suppressClickUntil=0;
-
-function getViewport(){
-  const vv=window.visualViewport;
-  return {
-    w: vv ? vv.width : window.innerWidth,
-    h: vv ? vv.height : window.innerHeight,
-    offsetTop: vv ? vv.offsetTop : 0,
-    offsetLeft: vv ? vv.offsetLeft : 0
-  };
-}
-function setFabPos(x,y){
-  const w=fab.offsetWidth||56, h=fab.offsetHeight||56;
-  const vp=getViewport();
-  x=Math.max(4, Math.min(vp.w-w-4, x));
-  y=Math.max(4, Math.min(vp.h-h-4, y));
-  fab.style.left=x+'px';
-  fab.style.top=(y+vp.offsetTop)+'px';
-  fab.style.right='auto'; fab.style.bottom='auto';
-}
-function resetFabToDefault(){
-  fab.style.left=''; fab.style.top='';
-  fab.style.right='20px';
-  fab.style.bottom='calc(20px + var(--safe-bottom))';
-}
-function initFabPosition(){ resetFabToDefault(); }
-
-function dragStart(e){
-  if(isOpen) return;
-  if(e.button!==undefined && e.button!==0) return;
-  const p=e.touches?e.touches[0]:e;
-  const r=fab.getBoundingClientRect();
-  dragState={ startX:p.clientX, startY:p.clientY, offX:p.clientX-r.left, offY:p.clientY-r.top, moved:false };
-}
-function dragMove(e){
-  if(!dragState) return;
-  const p=e.touches?e.touches[0]:e;
-  const dx=p.clientX-dragState.startX, dy=p.clientY-dragState.startY;
-  if(!dragState.moved && (Math.abs(dx)>5||Math.abs(dy)>5)){ dragState.moved=true; fab.style.transition='none'; }
-  if(dragState.moved){
-    if(e.cancelable) e.preventDefault();
-    const vp=getViewport();
-    setFabPos(p.clientX-dragState.offX-vp.offsetLeft, p.clientY-dragState.offY-vp.offsetTop);
-  }
-}
-function dragEnd(){
-  if(!dragState) return;
-  if(dragState.moved){
-    suppressClickUntil=Date.now()+350;
-    const r=fab.getBoundingClientRect(), vp=getViewport(), m=12;
-    if(r.left<m || r.top<m || r.right>vp.w-m || r.bottom>vp.h-m) resetFabToDefault();
-    fab.style.transition='';
-  }
-  dragState=null;
-}
-fab.addEventListener('mousedown', dragStart);
-window.addEventListener('mousemove', dragMove);
-window.addEventListener('mouseup', dragEnd);
-fab.addEventListener('touchstart', dragStart, {passive:true});
-window.addEventListener('touchmove', dragMove, {passive:false});
-window.addEventListener('touchend', dragEnd);
-window.addEventListener('touchcancel', dragEnd);
-
-function openChat(){
-  if(isOpen) return;
-  isOpen=true;
-  chatwin.classList.add('open');
-  fab.classList.add('hidden');
-  try{ history.pushState({pepeChatOpen:true},''); }catch(e){}
-}
-function closeChat(programmatic){
-  if(!isOpen) return;
-  isOpen=false;
-  chatwin.classList.remove('open');
-  fab.classList.remove('hidden');
-  try{ if(document.activeElement && chatwin.contains(document.activeElement)) document.activeElement.blur(); }catch(e){}
-  if(!programmatic){
-    try{
-      if(history.state && history.state.pepeChatOpen) history.back();
-    }catch(e){}
-  }
-}
-
-fab.addEventListener('click', (e)=>{
-  if(Date.now()<suppressClickUntil){ e.preventDefault(); e.stopPropagation(); return; }
-  if(isOpen) closeChat(); else openChat();
-});
-
-/* ═══ FIX: Chat ✕ close button ═══ */
-const chatCloseBtn = el('chatClose');
-if(chatCloseBtn) chatCloseBtn.addEventListener('click', () => closeChat());
-
-/* ═══ FIX: Mobile back button (popstate) ═══ */
-window.addEventListener('popstate', () => {
-  if(isOpen) closeChat(true);
-});
-
-/* ═══ FIX: Escape key ═══ */
-document.addEventListener('keydown', (e) => {
-  if(e.key === 'Escape' && isOpen){
-    const openModal = document.querySelector('.modal.show');
-    if(openModal) return;
-    closeChat();
-  }
-});
-
-/* ═══ Triple-tap FAB → open Settings ═══ */
-(function(){
-  const TRIPLE_MS=600;
-  let tapCount=0, firstTapTime=0, resetTimer=null;
-  function resetCounter(){ tapCount=0; firstTapTime=0; if(resetTimer){ clearTimeout(resetTimer); resetTimer=null; } }
-  fab.addEventListener('click', ()=>{
-    if(Date.now()<suppressClickUntil) return;
-    const now=Date.now();
-    if(!firstTapTime || now-firstTapTime>TRIPLE_MS){ tapCount=1; firstTapTime=now; }
-    else tapCount++;
-    if(resetTimer) clearTimeout(resetTimer);
-    resetTimer=setTimeout(resetCounter, TRIPLE_MS);
-    if(tapCount>=3){ resetCounter(); onSettings(); }
+  settings.maxInv = maxInv !== null ? Number(maxInv) : 0;
+  settings.maxBuys = maxBuys !== null ? Number(maxBuys) : 0;
+  settings.feePct = Number(fee);
+  persist().then(()=>{
+    closeSettings(); renderAll();
+    toast('✅ Settings saved');
   });
-})();
+}
 
-/* ═══ Boot ═══ */
-(async function boot(){
-  initFabPosition();
-  renderDashboardButtons();
+async function onReset(){
+  confirmAction('Reset Session?', 'Session, Orders, Chat সব ডেটা মুছে ফেলবে। Settings অপরিবর্তিত থাকবে।', async ()=>{
+    hideConfirm();
+    session = newSession(1);
+    await clearChat();
+    await persist();
+    closeFillModal();
+    replayChat();
+    goToState('askBuyPrice');
+    renderAll();
+    toast('🔄 Session reset');
+  });
+}
+async function onFullReset(){
+  confirmAction('Full Reset?', 'সব ডেটা (Session, Settings, Chat) মুছে ফেলবে। এই কাজটি ফেরানো যাবে না।', async ()=>{
+    hideConfirm();
+    session = newSession(1);
+    settings = {maxInv:0, maxBuys:0, feePct:0};
+    await clearChat();
+    await store.del('session');
+    await store.del('settings');
+    await store.del('chatHistory');
+    el('calcPrice').value='';
+    el('calcAmount').value='';
+    replayChat();
+    goToState('askBuyPrice');
+    renderAll();
+    renderCalc();
+    toast('🗑️ All data reset');
+  });
+}
+
+function initEvents(){
+  el('fab').addEventListener('click', showChat);
+  el('chatClose').addEventListener('click', closeChat);
+  el('stepRestart').addEventListener('click', ()=>{
+    if(submitLock) return;
+    const st=STATES[session.conversation.state];
+    if(st && st.restart){
+      botSay('🔄 Restarting…');
+      goToState(st.restart);
+    } else {
+      botSay('🔄 Restarting current step…');
+      resumeCurrentStateUI();
+    }
+  });
+  el('sendBtn').addEventListener('click', handleSubmit);
+  input.addEventListener('keydown', (e)=>{ if(e.key==='Enter'){ e.preventDefault(); handleSubmit(); } });
+  el('cfCancel').addEventListener('click', hideConfirm);
+  el('cfOk').addEventListener('click', ()=>{ if(_pendingConfirm) _pendingConfirm(); });
+  el('fmCancel').addEventListener('click', ()=>{ closeFillModal(); });
+  el('fmSave').addEventListener('click', saveFillModal);
+  el('btnHistory').addEventListener('click', openHistory);
+  el('histClose').addEventListener('click', closeHistory);
+  el('histExport').addEventListener('click', shareOrDownloadJSON);
+  el('setCancel').addEventListener('click', closeSettings);
+  el('setSave').addEventListener('click', saveSettings);
+  el('setExport').addEventListener('click', shareOrDownloadJSON);
+  window.addEventListener('popstate', (e)=>{
+    if(el('chatwin').classList.contains('open')){
+        if(e.state && e.state.chatClosed) return;
+        closeChat();
+    }
+  });
+  window.addEventListener('online', ()=>{ if(market.failCount>0) fetchLivePrice(); });
+  window.addEventListener('offline', ()=>{ market.status='offline'; renderTicker(); });
+}
+
+async function init(){
+  initEvents();
   setupPWA();
-  await loadAll();
-  renderAll();
   initCalc();
-  startConversation();
+  await loadAll();
+  replayChat();
+  goToState(session.conversation.state || 'askBuyPrice');
+  renderAll();
   fetchLivePrice();
-  setInterval(fetchLivePrice, 30000);
-})();
-
+  setInterval(fetchLivePrice, 60000);
+}
+window.addEventListener('DOMContentLoaded', init);
 })();
 </script>
 </body>

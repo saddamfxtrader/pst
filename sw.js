@@ -1,106 +1,76 @@
-/* PEPE Smart Trader v9.1 — Service Worker
-   ────────────────────────────────────────────────
-   Strategy:
-     • Cache same-origin app shell (index.html, sw.js)
-     • MEXC API + CORS proxy → always live, never cached
-     • Navigation → network-first, robust cache fallback
-     • Same-origin GET → cache-first, network fallback
-   
-   Cache bumped v7 → v8 (2026-11-21):
-     Includes PWA fixes in index.html (chat close button,
-     back-button handler, manifest+icons). Version bump forces
-     old v7 cache eviction so offline users get the new shell.
-   ──────────────────────────────────────────────── */
-const CACHE = 'pepe-shell-v9';
-const SHELL = ['./', './index.html', './sw.js'];
+/* PEPE Smart Trader PWA — Service Worker v10 */
+const CACHE = 'pepe-shell-v10';
+const SHELL = ['./', './index.html', './manifest.json', './sw.js', './icon-192.png', './icon-512.png'];
 
-/* ── Install: pre-cache shell (robust — one failure doesn't abort) ── */
-self.addEventListener('install', (e) => {
-  e.waitUntil(
+self.addEventListener('install', (event) => {
+  event.waitUntil(
     caches.open(CACHE)
-      .then(c => Promise.all(
-        SHELL.map(url => c.add(url).catch(err => {
-          console.warn('[SW] skip cache:', url, err);
-        }))
-      ))
+      .then(cache => Promise.allSettled(SHELL.map(url => cache.add(url))))
       .then(() => self.skipWaiting())
   );
 });
 
-/* ── Activate: delete every old cache, take control ── */
-self.addEventListener('activate', (e) => {
-  e.waitUntil(
+self.addEventListener('activate', (event) => {
+  event.waitUntil(
     caches.keys()
-      .then(keys => Promise.all(
-        keys.filter(k => k !== CACHE).map(k => caches.delete(k))
-      ))
+      .then(keys => Promise.all(keys.filter(key => key !== CACHE).map(key => caches.delete(key))))
       .then(() => self.clients.claim())
   );
 });
 
-/* ── Fetch ── */
-self.addEventListener('fetch', (e) => {
-  const req = e.request;
-  const url = new URL(req.url);
+self.addEventListener('fetch', (event) => {
+  const request = event.request;
+  const url = new URL(request.url);
 
-  /* 1) MEXC API + CORS proxy → always live */
+  // Live market endpoints must never be served from cache.
   if (url.hostname.endsWith('mexc.com') || url.hostname.endsWith('cors.dev')) {
-    e.respondWith(
-      fetch(req).catch(() => new Response('', { status: 503 }))
-    );
+    event.respondWith(fetch(request).catch(() => new Response('', { status: 503 })));
     return;
   }
 
-  /* 2) Navigation → network-first, then robust cache fallback */
-  if (req.mode === 'navigate') {
-    e.respondWith(
-      fetch(req)
-        .then(res => {
-          const cp = res.clone();
-          caches.open(CACHE).then(c => c.put(req, cp)).catch(() => {});
-          return res;
+  // Navigation: network first, then app-shell fallback.
+  if (request.mode === 'navigate') {
+    event.respondWith(
+      fetch(request)
+        .then(response => {
+          const copy = response.clone();
+          caches.open(CACHE).then(cache => cache.put(request, copy)).catch(() => {});
+          return response;
         })
         .catch(async () => {
-          const hit =
-            (await caches.match(req)) ||
-            (await caches.match('./index.html')) ||
-            (await caches.match('./'));
-          return hit || new Response(
-            '<h1>Offline</h1><p>Please reconnect and reload.</p>',
-            { status: 503, headers: { 'Content-Type': 'text/html; charset=utf-8' } }
-          );
+          return (await caches.match(request))
+            || (await caches.match('./index.html'))
+            || (await caches.match('./'))
+            || new Response('<h1>Offline</h1><p>Please reconnect and reload.</p>', {
+              status: 503,
+              headers: { 'Content-Type': 'text/html; charset=utf-8' }
+            });
         })
     );
     return;
   }
 
-  /* 3) Same-origin GET → cache-first, network fallback */
-  if (req.method === 'GET' && url.origin === location.origin) {
-    e.respondWith(
-      caches.match(req).then(hit => {
-        if (hit) return hit;
-        return fetch(req)
-          .then(res => {
-            const cp = res.clone();
-            caches.open(CACHE).then(c => c.put(req, cp)).catch(() => {});
-            return res;
+  // Same-origin static assets: cache first, network fallback.
+  if (request.method === 'GET' && url.origin === location.origin) {
+    event.respondWith(
+      caches.match(request).then(cached => {
+        if (cached) return cached;
+        return fetch(request)
+          .then(response => {
+            const copy = response.clone();
+            caches.open(CACHE).then(cache => cache.put(request, copy)).catch(() => {});
+            return response;
           })
           .catch(() => new Response('', { status: 503 }));
       })
     );
-    return;
   }
-
-  /* 4) Everything else → let browser handle it */
 });
 
-/* ── Message channel: page can trigger update / clear cache ── */
-self.addEventListener('message', (e) => {
-  if (!e.data || !e.data.type) return;
-  if (e.data.type === 'SKIP_WAITING') {
-    self.skipWaiting();
-  }
-  if (e.data.type === 'CLEAR_CACHE') {
-    caches.keys().then(keys => Promise.all(keys.map(k => caches.delete(k))));
+self.addEventListener('message', (event) => {
+  if (!event.data || !event.data.type) return;
+  if (event.data.type === 'SKIP_WAITING') self.skipWaiting();
+  if (event.data.type === 'CLEAR_CACHE') {
+    event.waitUntil(caches.keys().then(keys => Promise.all(keys.map(key => caches.delete(key)))));
   }
 });

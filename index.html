@@ -1990,15 +1990,6 @@ function replayChat(){
 
 
 
-  
-  chatBox.innerHTML = '';
-  for(const m of chatHistory){
-    if(m.who === 'user') appendMsgNode('user', m.text || '', false);
-    else appendMsgNode('bot', m.html || '', true);
-  }
-  requestAnimationFrame(() => { chatBox.scrollTop = chatBox.scrollHeight; });
-}
-
 function setInputEnabled(on, placeholder, quick, showBack){
   input.disabled = !on;
   sendBtn.disabled = !on;
@@ -2808,6 +2799,8 @@ input.addEventListener('keydown', (e) => {
   if(e.key === 'Enter' && !e.shiftKey && !input.disabled){ e.preventDefault(); handleSubmit(); }
 });
 
+  
+sendBtn.addEventListener('click', handleSubmit);
   sendBtn.addEventListener('touchend', e => { e.preventDefault(); handleSubmit(); }, { passive:false });
 sendBtn.addEventListener('mousedown', e => e.preventDefault());
 sendBtn.addEventListener('touchstart', e => e.preventDefault(), { passive:false });
@@ -2824,6 +2817,12 @@ function openChat(){
   requestAnimationFrame(() => { chatBox.scrollTop = chatBox.scrollHeight; });
 }
 
+function closeChat(){
+  el('chatwin').classList.remove('open');
+}
+el('chatClose').onclick = closeChat;
+
+  
 /* FAB drag/click */
 (function setupFab(){
   const fab = el('fab');

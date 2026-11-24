@@ -272,7 +272,10 @@ body{background:linear-gradient(180deg,#080c17 0%,#0a0f1e 100%);color:var(--txt)
 .msg .bubble .pos{color:var(--pos);font-weight:700}
 .msg .bubble .neg{color:var(--neg);font-weight:700}
 .msg .bubble code{background:#0a1424;padding:1px 5px;border-radius:5px;font-size:12px;color:#7dd3fc}
-
+  
+.msg .bubble-wrap{display:flex;flex-direction:column;min-width:0}
+.msg.user .bubble-wrap{align-items:flex-end}
+.msg-time{font-size:10px;color:var(--mut);margin-top:3px;padding:0 4px}
 .chatwin .dock-chat{
   border-top:1px solid var(--line);
   padding:7px 10px calc(8px + var(--safe-bottom));
@@ -1922,21 +1925,72 @@ function isNearBottom(){ return (chatBox.scrollHeight - chatBox.scrollTop - chat
 function scrollChatSmart(){ if(!userScrolledUp || isNearBottom()){ requestAnimationFrame(() => { chatBox.scrollTop = chatBox.scrollHeight; }); } }
 chatBox.addEventListener('scroll', () => { userScrolledUp = !isNearBottom(); }, { passive:true });
 
-function appendMsgNode(who, htmlOrText, isHtml){
+
+  function fmtMsgTime(ts){
+  const d = new Date(ts), now = new Date();
+  const hm = d.toLocaleTimeString('bn-BD',{hour:'numeric',minute:'2-digit',hour12:true});
+  const yest = new Date(now); yest.setDate(now.getDate()-1);
+  let day;
+  if(d.toDateString() === now.toDateString()) day = 'আজ';
+  else if(d.toDateString() === yest.toDateString()) day = 'গতকাল';
+  else day = d.toLocaleDateString('bn-BD',{day:'numeric',month:'short',year:'numeric'});
+  const sec = Math.max(0, Math.floor((now - d)/1000));
+  let ago;
+  if(sec < 60) ago = 'এইমাত্র';
+  else if(sec < 3600) ago = Math.floor(sec/60).toLocaleString('bn-BD') + ' মিনিট আগে';
+  else if(sec < 86400) ago = Math.floor(sec/3600).toLocaleString('bn-BD') + ' ঘন্টা আগে';
+  else ago = Math.floor(sec/86400).toLocaleString('bn-BD') + ' দিন আগে';
+  return day + ', ' + hm + ' · ' + ago;
+}
+function refreshMsgTimes(){
+  chatBox.querySelectorAll('.msg-time').forEach(t => { t.textContent = fmtMsgTime(Number(t.dataset.ts)); });
+}
+
+function appendMsgNode(who, htmlOrText, isHtml, ts){
+  ts = ts || Date.now();
   const d = document.createElement('div');
   d.className = 'msg ' + (who === 'user' ? 'user' : 'bot');
   const bubble = document.createElement('div');
   bubble.className = 'bubble';
   if(isHtml) bubble.innerHTML = sanitizeHTML(htmlOrText);
   else bubble.textContent = htmlOrText;
+  const wrap = document.createElement('div');
+  wrap.className = 'bubble-wrap';
+  wrap.appendChild(bubble);
+  const t = document.createElement('div');
+  t.className = 'msg-time';
+  t.dataset.ts = String(ts);
+  t.textContent = fmtMsgTime(ts);
+  wrap.appendChild(t);
   d.innerHTML = who === 'user' ? '<div class="avatar">👤</div>' : '<div class="avatar">🐸</div>';
-  d.appendChild(bubble);
+  d.appendChild(wrap);
   chatBox.appendChild(d);
   scrollChatSmart();
 }
-function botSay(html){ appendMsgNode('bot', html, true); chatHistory.push({ who:'bot', html, ts:Date.now() }); persistChat(); }
-function userSay(text){ appendMsgNode('user', String(text), false); chatHistory.push({ who:'user', text:String(text), ts:Date.now() }); persistChat(); }
+function botSay(html){
+  const ts = Date.now();
+  appendMsgNode('bot', html, true, ts);
+  chatHistory.push({ who:'bot', html, ts });
+  persistChat();
+}
+function userSay(text){
+  const ts = Date.now();
+  appendMsgNode('user', String(text), false, ts);
+  chatHistory.push({ who:'user', text:String(text), ts });
+  persistChat();
+}
 function replayChat(){
+  chatBox.innerHTML = '';
+  for(const m of chatHistory){
+    if(m.who === 'user') appendMsgNode('user', m.text || '', false, m.ts);
+    else appendMsgNode('bot', m.html || '', true, m.ts);
+  }
+  requestAnimationFrame(() => { chatBox.scrollTop = chatBox.scrollHeight; });
+}
+
+
+
+  
   chatBox.innerHTML = '';
   for(const m of chatHistory){
     if(m.who === 'user') appendMsgNode('user', m.text || '', false);
@@ -2088,8 +2142,7 @@ function handleSubmit(){
     return;
   }
   submitLock = true;
-  input.disabled = true;
-  sendBtn.disabled = true;
+
   try{
     input.value = '';
     userSay(raw);
@@ -2098,6 +2151,7 @@ function handleSubmit(){
     if(typeof next === 'function') next = next(result.value, session.conversation.data, result);
     if(!session.conversation.data) session.conversation.data = {};
     goToState(next);
+    input.focus({ preventScroll:true });
   } finally {
     setTimeout(() => { submitLock = false; }, 120);
   }
@@ -2753,19 +2807,22 @@ el('stepRestart').onclick = () => {
 input.addEventListener('keydown', (e) => {
   if(e.key === 'Enter' && !e.shiftKey && !input.disabled){ e.preventDefault(); handleSubmit(); }
 });
-sendBtn.onclick = handleSubmit;
 
+  sendBtn.addEventListener('touchend', e => { e.preventDefault(); handleSubmit(); }, { passive:false });
+sendBtn.addEventListener('mousedown', e => e.preventDefault());
+sendBtn.addEventListener('touchstart', e => e.preventDefault(), { passive:false });
+quickBox.addEventListener('mousedown', e => e.preventDefault());
+  
 /* Chat open/close */
+let chatInitialized = false;
 function openChat(){
   el('chatwin').classList.add('open');
-  if(chatHistory.length === 0){
-    startConversation();
+  if(!chatInitialized || chatHistory.length === 0){
+    chatInitialized = true;
+    startConversation();   // history থাকলে replayChat() নিজেই চালায়
   }
+  requestAnimationFrame(() => { chatBox.scrollTop = chatBox.scrollHeight; });
 }
-function closeChat(){
-  el('chatwin').classList.remove('open');
-}
-el('chatClose').onclick = closeChat;
 
 /* FAB drag/click */
 (function setupFab(){
@@ -2825,6 +2882,7 @@ async function boot(){
   setupPWA();
   fetchLivePrice();
   setInterval(fetchLivePrice, 30000);
+  setInterval(refreshMsgTimes, 30000);
   updateStepLabel();
 }
 

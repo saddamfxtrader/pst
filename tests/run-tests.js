@@ -123,6 +123,7 @@ const SANDBOX_CODE = `
   ${extractFunction('getActiveExitMode')}
   ${extractFunction('getActiveExitKind')}
   ${extractFunction('calculateExitTarget')}
+    ${extractFunction('orderConvertLoss')}
   ${extractFunction('computePosition')}
   ${extractFunction('fillOrder')}
   ${extractFunction('cancelOrder')}
@@ -609,6 +610,92 @@ test('Realized net respects snapshot fee (0.1%)', () => {
   // 3.600 * 0.999 = 3.5964;  3.5964 - 3.441 = 0.1554
   eq(p.realizedNet, '0.1554');
 });
+
+
+
+
+
+/* ═════════════════════════════════════════════════════
+ * F. CONVERT LOSS — REAL RECEIVED DATA
+ * ═════════════════════════════════════════════════════ */
+console.log('\nF. Convert Loss — Real Received Data');
+
+test('Spent 5 / received worth 4.99: cost stays 5, real qty drives sell target', () => {
+  const s = makeSession({
+    planTargetPct:'1', exitTargetPct:'1', exitTargetMode:'gross', targetPct:'1',
+    orders: [pendingBuy('O1','0.000003441','1453065.39','5')]
+  });
+  mod.setSession(s);
+  mod.setSettings({ maxInv:0, maxBuys:0, feePct:0 });
+  mod.setMarket({ price:null });
+  const r = mod.fillOrder('O1','1450000','5',true,'4.99');
+  eq(r.ok, true);
+  eq(s.orders[0].status, 'filled', 'status');
+  const p = mod.computePosition();
+  eq(p.totalBuyCost, '5', 'cost');
+  eq(p.remainingQty, '1450000', 'qty');
+  eq(p.totalConvertLoss, '0.01', 'convert loss');
+  eq(p.sellTarget, '0.000003483', 'sell target');
+  eq(mod.roundPrice(s.orders[0].fillPrice), '0.000003448', 'effective price');
+});
+
+test('Two orders: weighted average, sell target and loss', () => {
+  const o1 = Object.assign(makeBuy('O1','0.000003441','1450000','5'), { receivedValueUsdt:'4.99', receivedBasisUsdt:'5' });
+  const o2 = Object.assign(makeBuy('O2','0.000003500','2300000','8'), { receivedValueUsdt:'7.98', receivedBasisUsdt:'8' });
+  mod.setSession(makeSession({
+    planTargetPct:'1', exitTargetPct:'1', exitTargetMode:'gross', targetPct:'1',
+    orders:[o1, o2]
+  }));
+  mod.setSettings({ maxInv:0, maxBuys:0, feePct:0 });
+  mod.setMarket({ price:null });
+  const p = mod.computePosition();
+  eq(p.totalBuyCost, '13');
+  eq(p.totalBuyQty, '3750000');
+  eq(mod.roundPrice(p.avgBuy), '0.000003467', 'weighted avg');
+  eq(p.totalConvertLoss, '0.03', 'total loss');
+  eq(p.sellTarget, '0.000003502', 'sell target');
+});
+
+test('Old orders without receivedValue: loss is 0, nothing breaks', () => {
+  mod.setSession(makeSession({ orders:[makeBuy('O1','0.000003441','1000000','3.441')] }));
+  mod.setSettings({ maxInv:0, maxBuys:0, feePct:0 });
+  const p = mod.computePosition();
+  eq(p.totalConvertLoss, '0');
+});
+
+test('Buy with less USDT than plan stays partial', () => {
+  const s = makeSession({ orders:[pendingBuy('O1','0.000003441','1453065.39','5')] });
+  mod.setSession(s);
+  const r = mod.fillOrder('O1','500000','2',true);
+  eq(r.ok, true);
+  eq(s.orders[0].status, 'partial');
+});
+
+test('Mixed fills: loss counts only fills that had a received value', () => {
+  const s = makeSession({ orders:[pendingBuy('O1','0.000003441','1000000','3.441')] });
+  mod.setSession(s);
+  mod.setSettings({ maxInv:0, maxBuys:0, feePct:0 });
+  mod.setMarket({ price:null });
+  eq(mod.fillOrder('O1','500000','1.7205',true).ok, true);
+  eq(mod.fillOrder('O1','500000','1.7205',true,'1.71').ok, true);
+  eq(s.orders[0].status, 'filled');
+  eq(mod.computePosition().totalConvertLoss, '0.0105');
+});
+
+test('Invalid received value is rejected, order unchanged', () => {
+  const s = makeSession({ orders:[pendingBuy('O1','0.000003441','1000000','3.441')] });
+  mod.setSession(s);
+  const r = mod.fillOrder('O1','500000','1.7205',true,'abc');
+  eq(r.ok, false);
+  eq(s.orders[0].status, 'pending');
+});
+
+
+
+
+
+
+
 
 /* ═════════════════════════════════════════════════════
  * SUMMARY

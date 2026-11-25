@@ -512,6 +512,7 @@ body{background:linear-gradient(180deg,#080c17 0%,#0a0f1e 100%);color:var(--txt)
       <div class="stat"><div class="l">Active Exit Target</div><div class="v" id="sTargetPct">0%</div></div>
       <div class="stat"><div class="l">Active Exit Mode</div><div class="v" id="sTargetMode">—</div></div>
       <div class="stat"><div class="l">Realized % (on sold basis)</div><div class="v" id="sRplPct">0%</div></div>
+            <div class="stat wide"><div class="l">Total Convert Loss</div><div class="v" id="sConvLoss">0.0000 USDT</div></div>
       <div class="stat wide">
         <div class="l">Active Exit Progress</div>
         <div class="v" id="sRecovery">—</div>
@@ -2848,6 +2849,9 @@ function openFillModal(orderId){
   const planQtyLeft  = D.sub(o.qty  || '0', o.filledQty  || '0');
   const planUsdtLeft = D.sub(o.usdt || '0', o.filledUsdt || '0');
   fillCtx = { orderId, side:o.side, price:o.price, planQtyLeft, planUsdtLeft, order:o };
+    el('fmRecvWrap').style.display = o.side === 'buy' ? '' : 'none';
+  el('fmRecv').value = '';
+  
   fillSelectedPct = 100;
   el('fmTitle').textContent = (o.status === 'partial' ? 'Add fill — ' : 'Fill — ') + o.id;
   const alreadyRow = (o.status === 'partial' || o.status === 'filled')
@@ -2936,7 +2940,12 @@ function updateFillPreview(){
   let line1, line2;
   if(fillCtx.side === 'buy'){
     line1 = `📊 After this fill: <b>${fmtU(cumUsdt)} USDT</b> cost · <b>${fmtQFull(cumQty)} PEPE</b>`;
-    line2 = `New avg buy: <b>${fmtP(avg)}</b>`;
+        line2 = `Effective Buy Price: <b>${fmtP(avg)}</b>`;
+    const rvRaw = el('fmRecv').value.trim();
+    const rvN = rvRaw === '' ? null : parseUSDT(rvRaw);
+    if(rvN !== null && n(newFillUsdt) > 0){
+      line2 += `<br>Convert Loss: <b>${fmtU(D.sub(newFillUsdt, rvN), 4)} USDT</b>`;
+    }
   } else {
     line1 = `📊 After this fill: <b>${fmtU(cumUsdt)} USDT</b> proceeds · <b>${fmtQFull(cumQty)} PEPE</b>`;
     line2 = `Avg sell price: <b>${fmtP(avg)}</b>`;
@@ -3049,24 +3058,26 @@ el('fmUsdt').addEventListener('input', () => {
   updateFillPreview();
 });
 
-  
+
+  el('fmRecv').addEventListener('input', () => { if(fillCtx) updateFillPreview(); });
 el('fmCancel').onclick = closeFillModal;
+
+  
+  
 el('fmSave').onclick = () => {
   if(!fillCtx) return;
   const q = el('fmQty').value.trim();
   const u = el('fmUsdt').value.trim();
+  const rvRaw = el('fmRecv').value.trim();
   if(q === '' && u === ''){ toast('⚠️ Fill amount দিন'); return; }
-  let result;
-  if(q !== '' && u !== ''){
-    result = fillOrder(fillCtx.orderId, q, u, false);
-  } else if(q !== ''){
-    result = fillOrder(fillCtx.orderId, q, null, false);
-  } else {
-    result = fillOrder(fillCtx.orderId, null, u, false);
-  }
+  const rv = (fillCtx.side === 'buy' && rvRaw !== '') ? rvRaw : null;
+  if(rv !== null && parseUSDT(rv) === null){ toast('⚠️ Received Value ভুল'); return; }
+  const result = fillOrder(fillCtx.orderId, q !== '' ? q : null, u !== '' ? u : null, false, rv);
   if(result.ok) closeFillModal();
   else toast('⚠️ ' + result.msg);
 };
+
+  
 
 /* Step restart */
 el('stepRestart').onclick = () => {

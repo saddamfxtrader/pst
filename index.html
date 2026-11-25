@@ -433,9 +433,12 @@ body{background:linear-gradient(180deg,#080c17 0%,#0a0f1e 100%);color:var(--txt)
   <div class="card" id="calcCard">
     <h2>
       <span>🧮 MEXC Convert Limit</span>
-      <button class="mini-btn" id="calcToggle" aria-label="Toggle calculator">▼</button>
-    </h2>
-    <div id="calcBody">
+      
+    <button class="mini-btn" id="calcToggle" aria-label="Toggle calculator">▶</button>
+</h2>
+<div id="calcBody" style="display:none">
+
+      
       <div class="calc-inputs">
         <div>
           <label>Target PEPE Price (USDT)</label>
@@ -1389,7 +1392,7 @@ const CALC_IDS = {
   useLive:'calcUseLive', copy:'calcCopy', quick:'calcQuickUsdt'
 };
 const CALC_QUICK_USDT = [1, 5, 10, 25, 50, 100];
-let calcCollapsed = false;
+let calcCollapsed = true;
 let calcCopyText = '';
 
 function calcParseNumber(v, { allowZero=false } = {}){
@@ -1511,15 +1514,21 @@ function initCalc(){
       qbox.appendChild(b);
     });
   }
+
+
+  
   const toggle = el(CALC_IDS.toggle);
   const body   = el(CALC_IDS.body);
   if(toggle && body){
+    body.style.display = calcCollapsed ? 'none' : '';
+    toggle.textContent = calcCollapsed ? '▶' : '▼';
     toggle.addEventListener('click', () => {
       calcCollapsed = !calcCollapsed;
       body.style.display = calcCollapsed ? 'none' : '';
       toggle.textContent = calcCollapsed ? '▶' : '▼';
     });
   }
+
   renderCalc();
 }
 

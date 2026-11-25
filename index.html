@@ -2724,6 +2724,12 @@ function renderDashboard(){
   el('sCost').textContent = fmtU(p.totalBuyCost);
   el('sQty').textContent = fmtQFull(p.remainingQty);
 
+  const cl = el('sConvLoss');
+  if(cl){
+    cl.textContent = fmtU(p.totalConvertLoss, 4) + ' USDT';
+    cl.className = 'v ' + (n(p.totalConvertLoss) > 0 ? 'neg' : '');
+  }
+  
   const upl = el('sUpl');
   if(p.hasPrice && D.gt(p.remainingQty, '0')){
     upl.textContent = (n(p.unrealized) >= 0 ? '+' : '') + fmtU(p.unrealized) + ' USDT';
@@ -2797,8 +2803,16 @@ function renderOrders(){
       actions = `<button data-fill="${o.id}" style="font-size:10px;padding:4px 8px;border-radius:8px;border:1px solid #14301f;background:#0c1c13;color:#86efac;cursor:pointer">Add fill…</button>
                  <button data-cancel="${o.id}" style="font-size:10px;padding:4px 8px;border-radius:8px;border:1px solid #3a1a1a;background:#1c0f0f;color:#fca5a5;cursor:pointer">Cancel</button>`;
     }
-    const filledRow = (o.status === 'filled' || o.status === 'partial' || o.status === 'cancelled_partial')
-      ? `<div class="t">Filled: ${fmtU(o.filledUsdt)} USDT · ${fmtQFull(o.filledQty)} PEPE @ ${fmtP(o.fillPrice)}</div>` : '';
+       let filledRow = '';
+    if(o.status === 'filled' || o.status === 'partial' || o.status === 'cancelled_partial'){
+      const isBuy = o.side === 'buy';
+      filledRow = `<div class="t">${isBuy ? 'Spent' : 'Proceeds'}: ${fmtU(o.filledUsdt, 4)} USDT · ${isBuy ? 'Received' : 'Sold'}: ${fmtQFull(o.filledQty)} PEPE</div>` +
+        `<div class="t">Effective Price: ${fmtP(o.fillPrice)}</div>`;
+      const cl = orderConvertLoss(o);
+      if(cl !== null) filledRow += `<div class="t">Received Value: ${fmtU(o.receivedValueUsdt, 4)} USDT · Convert Loss: <span class="${n(cl) > 0 ? 'neg' : 'pos'}">${fmtU(cl, 4)} USDT</span></div>`;
+    }
+
+    
     const feeRow = (o.side === 'sell' && o.feePct != null) ? ` · Fee: ${o.feePct}%` : '';
     d.innerHTML = `<div style="flex:1;min-width:0">
       <div><b>${side}</b> @ ${fmtP(o.price)} <span class="badge ${badgeCls}">${st}</span></div>
@@ -2970,6 +2984,7 @@ function openHistoryModal(){
   html += `<div class="row"><span>Session Return (Gross)</span><span>${fmtPct(p.sessionReturnPct)}</span></div>`;
   html += `<div class="row"><span>Session Return (Net)</span><span>${fmtPct(p.sessionReturnNetPct)}</span></div>`;
   html += `<div class="row"><span>Remaining PEPE</span><span>${fmtQFull(p.remainingQty)}</span></div>`;
+    html += `<div class="row"><span>Total Convert Loss</span><span>${fmtU(p.totalConvertLoss, 4)} USDT</span></div>`;
   html += `<div class="row"><span>Active Exit</span><span>${activeExitLabel(p)}</span></div>`;
   html += `<div class="row"><span>Plan Target</span><span>${p.planTargetPct}%</span></div>`;
   html += `</div>`;
@@ -2983,7 +2998,9 @@ function openHistoryModal(){
       html += `<div class="hist-item"><div style="flex:1;min-width:0">
         <div><b>${side}</b> @ ${fmtP(o.price)} <span class="badge b-ready">${o.status}</span></div>
         <div class="t">Plan: ${fmtU(o.usdt)} USDT · ${fmtQFull(o.qty)} PEPE${feeStr}</div>
-        <div class="t">Filled: ${fmtU(o.filledUsdt)} USDT · ${fmtQFull(o.filledQty)} PEPE${o.fillPrice ? ' @ ' + fmtP(o.fillPrice) : ''}</div>
+       
+          <div class="t">${o.side === 'buy' ? 'Spent' : 'Proceeds'}: ${fmtU(o.filledUsdt, 4)} USDT · ${o.side === 'buy' ? 'Received' : 'Sold'}: ${fmtQFull(o.filledQty)} PEPE${o.fillPrice ? ' · Effective: ' + fmtP(o.fillPrice) : ''}</div>
+        ${orderConvertLoss(o) !== null ? `<div class="t">Received Value: ${fmtU(o.receivedValueUsdt, 4)} USDT · Convert Loss: ${fmtU(orderConvertLoss(o), 4)} USDT</div>` : ''}
       </div></div>`;
     }
   }

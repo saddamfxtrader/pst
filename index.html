@@ -339,9 +339,43 @@ body{background:linear-gradient(180deg,#080c17 0%,#0a0f1e 100%);color:var(--txt)
 .chatwin .dock-inner button:active{transform:scale(.9)}
 .chatwin .dock-inner button:disabled{opacity:.4;cursor:not-allowed}
 
-.modal{position:fixed;inset:0;background:rgba(3,6,14,.82);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;padding:20px;z-index:600;opacity:0;pointer-events:none;transition:.25s}
+.modal{
+  position:fixed;
+  inset:0;
+  background:rgba(3,6,14,.82);
+  backdrop-filter:blur(4px);
+  display:flex;
+  flex-direction: column; /* সেন্টারের বদলে কলাম ডিরেকশন */
+  padding:20px;
+  z-index:600;
+  opacity:0;
+  pointer-events:none;
+  transition:.25s;
+  overflow-y: auto; /* কিবোর্ড ওপেন হলে স্ক্রল করার জন্য */
+  -webkit-overflow-scrolling: touch;
+}
 .modal.show{opacity:1;pointer-events:auto}
-.modal-box{background:var(--panel);border:1px solid #22304e;border-radius:20px;padding:22px 18px;max-width:420px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,.6);transform:scale(.92);transition:.25s;max-height:calc(100dvh - 40px);display:flex;flex-direction:column}
+.modal-box{
+  background:var(--panel);
+  border:1px solid #22304e;
+  border-radius:20px;
+  padding:22px 18px;
+  max-width:420px;
+  width:100%;
+  box-shadow:0 20px 60px rgba(0,0,0,.6);
+  transform:scale(.92);
+  transition:.25s;
+  max-height:calc(100dvh - 40px);
+  display:flex;
+  flex-direction:column;
+  margin: auto; /* এটি মোডালকে মাঝখানে রাখবে, কিন্তু স্ক্রল হলে উপরে-নিচে যাওয়া আটকাবে না */
+  flex-shrink: 0;
+}
+.modal-box input {
+  scroll-margin-bottom: 20px; /* কিবোর্ড ওপেন হলে ইনপুটটি স্ক্রিনের একদম নিচে লেগে থাকবে না */
+}
+
+  
 .modal.show .modal-box{transform:scale(1)}
 .modal-box h3{font-size:17px;margin-bottom:6px;color:#fff;flex-shrink:0}
 .modal-box p{font-size:13px;color:var(--mut);line-height:1.5;margin-bottom:14px}

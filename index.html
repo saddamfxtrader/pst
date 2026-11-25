@@ -161,6 +161,15 @@ body{background:linear-gradient(180deg,#080c17 0%,#0a0f1e 100%);color:var(--txt)
 .calc-copy-row{margin-top:8px;display:flex;gap:6px}
 .calc-copy-row .mini-btn{flex:1}
 
+
+  /* Average Price Calculator (reverse calc) */
+.avg-sec{margin-top:14px;border-top:1px dashed var(--line);padding-top:12px}
+.avg-head{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.avg-head .avg-title{font-size:12.5px;font-weight:700;color:#c7d6ee}
+.avg-body{margin-top:10px}
+.avg-out-v{font-size:17px;line-height:1.3;word-break:break-all}
+.avg-out-short{font-size:11px;color:var(--mut);margin-top:3px;font-variant-numeric:tabular-nums}
+
 .toast{position:fixed;left:50%;bottom:120px;transform:translateX(-50%) translateY(30px);background:#0b1a33;color:#fff;border:1px solid #1e3a5f;padding:11px 20px;border-radius:30px;font-size:13px;font-weight:600;box-shadow:0 10px 30px rgba(0,0,0,.5);opacity:0;transition:.3s;z-index:999;pointer-events:none;max-width:88%;text-align:center}
 .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
 
@@ -452,6 +461,42 @@ body{background:linear-gradient(180deg,#080c17 0%,#0a0f1e 100%);color:var(--txt)
         <div class="stat"><div class="l">Estimated PEPE</div><div class="v" id="calcEstPepe">—</div></div>
         <div class="stat"><div class="l">Target vs Live</div><div class="v" id="calcDiff">—</div></div>
       </div>
+
+
+
+
+    <div class="avg-sec" id="avgSec">
+      <div class="avg-head">
+        <span class="avg-title">📐 Average Price Calculator</span>
+        <button class="mini-btn" id="avgToggle" type="button" aria-label="Toggle average price calculator">▶</button>
+      </div>
+      <div class="avg-body" id="avgBody" style="display:none">
+        <div class="calc-inputs">
+          <div>
+            <label>Total Invested USDT</label>
+            <input id="avgUsdt" type="text" inputmode="decimal" autocomplete="off" placeholder="e.g. 5" enterkeyhint="next">
+          </div>
+          <div>
+            <label>Total PEPE Received</label>
+            <input id="avgPepe" type="text" inputmode="decimal" autocomplete="off" placeholder="e.g. 1415311" enterkeyhint="done">
+          </div>
+        </div>
+        <div class="grid" style="margin-top:12px">
+          <div class="stat hero">
+            <div class="l">Average Buy Price (USDT)</div>
+            <div class="v gold avg-out-v" id="avgOut">—</div>
+            <div class="avg-out-short" id="avgOutShort"></div>
+            <div class="calc-copy-row">
+              <button type="button" class="mini-btn" id="avgUse" disabled>✅ Use this Price</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+
+
+      
     </div>
   </div>
 
@@ -1447,6 +1492,85 @@ function initCalc(){
   renderCalc();
 }
 
+
+
+
+
+
+/* ── Average Price Calculator (reverse calc) ── */
+let avgOpen = false;
+let avgResult = '';
+function renderAvgCalc(){
+  const uEl = el('avgUsdt'), pEl = el('avgPepe');
+  const out = el('avgOut'), shortEl = el('avgOutShort'), useBtn = el('avgUse');
+  if(!uEl || !pEl || !out) return;
+  const u = calcParseNumber(uEl.value);
+  const p = calcParseNumber(pEl.value);
+  uEl.classList.toggle('invalid', !!uEl.value.trim() && !u);
+  pEl.classList.toggle('invalid', !!pEl.value.trim() && !p);
+  let price = '';
+  if(u && p){
+    try{
+      const r = roundPrice(D.div(u, p, 18));
+      if(n(r) > 0) price = r;
+    }catch(e){ price = ''; }
+  }
+  avgResult = price;
+  if(price){
+    out.textContent = price;
+    shortEl.textContent = 'Short: ' + fmtP(price);
+    useBtn.disabled = false;
+  } else {
+    out.textContent = '—';
+    shortEl.textContent = '';
+    useBtn.disabled = true;
+  }
+}
+function useAvgPrice(){
+  if(!avgResult){ toast('⚠️ আগে সঠিক USDT ও PEPE দিন'); return; }
+  const priceEl = el(CALC_IDS.price);
+  if(!priceEl) return;
+  priceEl.value = avgResult;
+  if(calcCollapsed){
+    calcCollapsed = false;
+    const body = el(CALC_IDS.body), tg = el(CALC_IDS.toggle);
+    if(body) body.style.display = '';
+    if(tg) tg.textContent = '▼';
+  }
+  renderCalc();
+  toast('✅ গড় দাম বসানো হয়েছে');
+}
+function setAvgOpen(open){
+  avgOpen = !!open;
+  const body = el('avgBody'), tg = el('avgToggle');
+  if(body) body.style.display = avgOpen ? '' : 'none';
+  if(tg) tg.textContent = avgOpen ? '▼' : '▶';
+}
+function resetAvgCalc(){
+  const uEl = el('avgUsdt'), pEl = el('avgPepe');
+  if(uEl) uEl.value = '';
+  if(pEl) pEl.value = '';
+  setAvgOpen(false);
+  renderAvgCalc();
+}
+function initAvgCalc(){
+  const uEl = el('avgUsdt'), pEl = el('avgPepe');
+  if(!uEl || !pEl) return;
+  uEl.addEventListener('input', renderAvgCalc);
+  pEl.addEventListener('input', renderAvgCalc);
+  el('avgUse').addEventListener('click', useAvgPrice);
+  el('avgToggle').addEventListener('click', () => setAvgOpen(!avgOpen));
+  setAvgOpen(false);
+  renderAvgCalc();
+}
+
+
+
+
+
+
+
+  
 /* ── PWA ── */
 function setupPWA(){
   if('serviceWorker' in navigator &&
@@ -2384,6 +2508,7 @@ async function resetAll(){
   const toggle = el(CALC_IDS.toggle);
   if(body) body.style.display = '';
   if(toggle) toggle.textContent = '▼';
+  resetAvgCalc();
   await persist();
   chatBox.innerHTML = '';
   userScrolledUp = false;
@@ -2878,6 +3003,7 @@ async function boot(){
   renderDashboardButtons();
   renderAll();
   initCalc();
+  initAvgCalc();
   setupPWA();
   fetchLivePrice();
   setInterval(fetchLivePrice, 30000);

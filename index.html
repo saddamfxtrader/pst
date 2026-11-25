@@ -1057,7 +1057,8 @@ async function loadAll(){
 
   /* Sanity: pending order forces pending state */
   const pend = session.orders.find(o => o.status === 'pending');
-  if(pend && !['afterPending','afterSellPending'].includes(session.conversation.state)){
+ 
+      if(pend && !['afterPending','afterSellPending','askRecvQty','askRecvSpent','askRecvValue'].includes(session.conversation.state)){
     setConversationState(pend.side === 'buy' ? 'afterPending' : 'afterSellPending', { pendingOrderId: pend.id });
     migrated = true;
   }
@@ -1070,11 +1071,22 @@ async function loadAll(){
  * PART 4/N — Position, Exit Target, Fill, Cancel
  * ═══════════════════════════════════════════════════════ */
 
+function orderConvertLoss(o){
+  if(!o || o.side !== 'buy' || o.receivedValueUsdt == null) return null;
+  const basis = o.receivedBasisUsdt != null ? o.receivedBasisUsdt : (o.filledUsdt || '0');
+  return D.sub(basis, o.receivedValueUsdt);
+}
+
 function computePosition(){
   const allBuys  = session.orders.filter(o => o.side === 'buy'  && (o.status === 'filled' || o.status === 'partial' || o.status === 'cancelled_partial'));
   const allSells = session.orders.filter(o => o.side === 'sell' && (o.status === 'filled' || o.status === 'partial' || o.status === 'cancelled_partial'));
 
-  let totalBuyCost = '0', totalBuyQty = '0';
+   let totalBuyCost = '0', totalBuyQty = '0', totalConvertLoss = '0';
+  for(const b of allBuys){
+    const cl = orderConvertLoss(b);
+    if(cl !== null) totalConvertLoss = D.add(totalConvertLoss, cl);
+  }
+  
   for(const b of allBuys){
     totalBuyCost = D.add(totalBuyCost, b.filledUsdt || '0');
     totalBuyQty  = D.add(totalBuyQty,  b.filledQty || '0');
@@ -1123,7 +1135,7 @@ function computePosition(){
   }
 
   return {
-    totalBuyCost, totalBuyQty, totalSellProceeds, totalSellNetProceeds, totalSellQty,
+       totalBuyCost, totalBuyQty, totalSellProceeds, totalSellNetProceeds, totalSellQty, totalConvertLoss,
     remainingQty, avgBuy, breakEven, realizedCostOfSold, realizedGross, realizedNet,
     feeEstimate, realizedPct_onSold, sessionReturnPct, sessionReturnNetPct,
     remainingBasis, planTargetPct, targetPct, exitTargetMode, exitTargetKind,
@@ -1199,7 +1211,7 @@ function nextOrderId(){ return 'O' + (orderSeq++); }
 function pushOrder(order){ session.orders.push(order); persist(); renderAll(); }
 
 /* Fill: returns {ok, msg} */
-function fillOrder(id, addQty, addUsdt, isFromChat){
+function fillOrder(id, addQty, addUsdt, isFromChat, recvValue){
   isFromChat = !!isFromChat;
   const o = session.orders.find(x => x.id === id);
   if(!o) return { ok:false, msg:'Order পাওয়া যায়নি' };
@@ -1239,12 +1251,29 @@ function fillOrder(id, addQty, addUsdt, isFromChat){
     }
   }
 
+
+
+
+  let rvClean = null;
+  if(o.side === 'buy' && recvValue != null && String(recvValue).trim() !== ''){
+    rvClean = parseUSDT(recvValue);
+    if(rvClean === null) return { ok:false, msg:'Received Value সঠিক নয়' };
+  }
+
+
+
+
+  
   const newQty  = D.add(o.filledQty  || '0', qAdd);
   const newUsdt = D.add(o.filledUsdt || '0', uAdd);
   o.filledQty  = newQty;
   o.filledUsdt = newUsdt;
   o.fillPrice  = D.gt(newQty, '0') ? D.div(newUsdt, newQty, 18) : o.price;
-  o.status = D.gte(newQty, o.qty) ? 'filled' : 'partial';
+   o.status = (D.gte(newQty, o.qty) || (o.side === 'buy' && D.gte(newUsdt, o.usdt))) ? 'filled' : 'partial';
+  if(rvClean !== null){
+    o.receivedValueUsdt = D.add(o.receivedValueUsdt || '0', rvClean);
+    o.receivedBasisUsdt = D.add(o.receivedBasisUsdt || '0', uAdd);
+  }
 
   persist();
   renderAll();
@@ -1576,6 +1605,23 @@ function setupPWA(){
   }
 }
 
+
+function recvContext(d){
+  if(d.recvOrderId){
+    const o = session.orders.find(x => x.id === d.recvOrderId);
+    if(o) return { order:o, price:o.price, qtyLeft:D.sub(o.qty || '0', o.filledQty || '0'), usdtLeft:D.sub(o.usdt || '0', o.filledUsdt || '0') };
+  }
+  return { order:null, price:d.buyPrice, qtyLeft:floorQty(D.div(d.invest, d.buyPrice, 18)), usdtLeft:String(d.invest) };
+}
+function applyPlanTargetIfNeeded(d){
+  if(n(getPlanTargetPct()) <= 0){
+    session.planTargetPct = String(d.planTargetPct);
+    session.targetPct = session.planTargetPct;
+    setActiveExit(session.planTargetPct, 'gross', 'plan');
+  }
+}
+
+  
 /* ── Chat States ── */
 const STATES = {
   askBuyPrice: {
@@ -1684,6 +1730,113 @@ const STATES = {
       return v === 'filled' ? 'afterBuyFilled' : 'afterPending';
     }
   },
+
+
+
+
+
+
+  askRecvQty: {
+    field:'recvQty',
+    stepLabel:'📍 Fill তথ্য ১/৩ — প্রাপ্ত PEPE',
+    back:(d)=> d.recvOrderId ? 'afterPending' : 'confirmBuy',
+    say:(d)=>{
+      const c = recvContext(d);
+      return `✅ <b>Fill-এর আসল তথ্য দিন</b>\n\n`+
+        `Buy Limit: <b>${fmtP(c.price)}</b>\n`+
+        `অনুমানকৃত PEPE: ${fmtQFull(c.qtyLeft)}\n\n`+
+        `MEXC থেকে <b>মোট কত PEPE</b> পেয়েছেন?`;
+    },
+    placeholder:'পাওয়া PEPE সংখ্যা',
+    validate:(v,d)=>{
+      const x = parseUSDT(v);
+      if(x === null || n(x) <= 0) return { ok:false, msg:'0-এর বেশি PEPE সংখ্যা দিন' };
+      const q = floorQty(x);
+      if(D.isZero(q)) return { ok:false, msg:'সংখ্যা খুব ছোট' };
+      const c = recvContext(d);
+      if(D.gt(q, c.qtyLeft)) return { ok:false, msg:'অনুমানকৃত ' + fmtQFull(c.qtyLeft) + ' PEPE-এর বেশি হতে পারে না — সংখ্যা আবার দেখুন' };
+      return { ok:true, value:q };
+    },
+    next:'askRecvSpent'
+  },
+  askRecvSpent: {
+    field:'recvSpent',
+    stepLabel:'📍 Fill তথ্য ২/৩ — খরচ হওয়া USDT',
+    back:'askRecvQty',
+    say:(d)=>{
+      const c = recvContext(d);
+      return `প্রাপ্ত PEPE: <b>${fmtQFull(d.recvQty)}</b>\n\nকত <b>USDT খরচ</b> হয়েছে?\n(ডিফল্ট: ${fmtU(c.usdtLeft, 4)} USDT — নিচের বাটন চাপলেই বসবে)`;
+    },
+    placeholder:'খরচ হওয়া USDT',
+    quick:(d)=>{
+      const c = recvContext(d);
+      return [{ label:'✅ ' + fmtU(c.usdtLeft, 4) + ' USDT (ডিফল্ট)', value:c.usdtLeft }];
+    },
+    validate:(v,d)=>{
+      const x = parseUSDT(v);
+      if(x === null || n(x) <= 0) return { ok:false, msg:'0-এর বেশি USDT দিন' };
+      const c = recvContext(d);
+      if(D.gt(x, c.usdtLeft)) return { ok:false, msg:'Order-এর ' + fmtU(c.usdtLeft, 4) + ' USDT-এর বেশি হতে পারে না' };
+      return { ok:true, value:x };
+    },
+    next:'askRecvValue'
+  },
+  askRecvValue: {
+    field:'recvValue',
+    stepLabel:'📍 Fill তথ্য ৩/৩ — Received Value (ঐচ্ছিক)',
+    back:'askRecvSpent',
+    say:(d)=>{
+      const eff = D.gt(d.recvQty, '0') ? roundPrice(D.div(d.recvSpent, d.recvQty, 18)) : '0';
+      return `খরচ: <b>${fmtU(d.recvSpent, 4)} USDT</b> · প্রাপ্ত: <b>${fmtQFull(d.recvQty)} PEPE</b>\n`+
+        `Effective Buy Price: <span class="hl">${fmtP(eff)}</span>\n\n`+
+        `MEXC-এ পাওয়া PEPE-এর <b>Received Value কত USDT</b> দেখাচ্ছে? (যেমন 4.99)\n`+
+        `জানা না থাকলে <code>skip</code> লিখুন বা Skip চাপুন — এটি শুধু Convert Loss দেখানোর জন্য।`;
+    },
+    placeholder:'Received Value USDT / skip',
+    quick:[{ label:'⏭ Skip', value:'skip' }],
+    validate:(v)=>{
+      const s = v.toLowerCase().trim();
+      if(['skip','না','no','-'].includes(s)) return { ok:true, value:'' };
+      const x = parseUSDT(v);
+      if(x === null || n(x) <= 0) return { ok:false, msg:'0-এর বেশি USDT দিন অথবা skip লিখুন' };
+      return { ok:true, value:x };
+    },
+    next:(v,d)=>{
+      const qty = d.recvQty, spent = d.recvSpent;
+      const recv = v ? String(v) : null;
+      const clean = () => { delete d.recvOrderId; delete d.recvQty; delete d.recvSpent; delete d.recvValue; };
+      let r;
+      if(d.recvOrderId){
+        const exists = session.orders.find(x => x.id === d.recvOrderId);
+        if(!exists){ clean(); return 'afterBuyFilled'; }
+        r = fillOrder(d.recvOrderId, qty, spent, true, recv);
+        if(!r.ok){ botSay('❌ ' + r.msg); return 'askRecvQty'; }
+        delete d.pendingOrderId;
+      } else {
+        applyPlanTargetIfNeeded(d);
+        const planQty = floorQty(D.div(d.invest, d.buyPrice, 18));
+        const order = {
+          id:nextOrderId(), side:'buy', type:'limit', price:d.buyPrice, usdt:d.invest, qty:planQty,
+          status:'pending', filledUsdt:'0', filledQty:'0', fillPrice:null,
+          ts:Date.now(), note:''
+        };
+        session.orders.push(order);
+        r = fillOrder(order.id, qty, spent, true, recv);
+        if(!r.ok){ session.orders.pop(); orderSeq--; botSay('❌ ' + r.msg); return 'askRecvQty'; }
+      }
+      clean();
+      return sessionTargetHit() ? 'sessionComplete' : 'afterBuyFilled';
+    }
+  },
+
+
+
+
+
+
+
+
+  
   afterPending: {
     field:'_go',
     stepLabel:'⏳ Pending Buy Order',

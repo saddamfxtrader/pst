@@ -603,6 +603,12 @@ body{background:linear-gradient(180deg,#080c17 0%,#0a0f1e 100%);color:var(--txt)
     <input id="fmQty" type="number" min="0" step="any" inputmode="decimal" placeholder="e.g. 6000000">
     <label>Fill Amount — USDT (spent/proceeds)</label>
     <input id="fmUsdt" type="number" min="0" step="any" inputmode="decimal" placeholder="e.g. 60">
+
+        <div id="fmRecvWrap">
+      <label>Received Value — USDT (ঐচ্ছিক, MEXC যত USDT মূল্য দেখাচ্ছে)</label>
+      <input id="fmRecv" type="number" min="0" step="any" inputmode="decimal" placeholder="e.g. 4.99">
+    </div>
+    
     <div class="fm-preview" id="fmPreview"></div>
     <div class="actions">
       <button class="cancel" id="fmCancel">❌ Cancel</button>
@@ -1710,25 +1716,27 @@ const STATES = {
       if(['pending','pend','অপেক্ষা','no','n'].includes(s)) return { ok:true, value:'pending' };
       return { ok:false, msg:'"filled" অথবা "pending" দিন' };
     },
+
+
+
+    
     next:(v,d)=>{
-      const qty = floorQty(D.div(d.invest, d.buyPrice, 18));
-      if(n(getPlanTargetPct()) <= 0){
-        session.planTargetPct = String(d.planTargetPct);
-        session.targetPct = session.planTargetPct;
-        setActiveExit(session.planTargetPct, 'gross', 'plan');
+      if(v === 'filled'){
+        delete d.recvOrderId;
+        return 'askRecvQty';
       }
+      applyPlanTargetIfNeeded(d);
+      const qty = floorQty(D.div(d.invest, d.buyPrice, 18));
       const order = {
         id:nextOrderId(), side:'buy', type:'limit', price:d.buyPrice, usdt:d.invest, qty,
-        status: v === 'filled' ? 'filled' : 'pending',
-        filledUsdt: v === 'filled' ? d.invest : '0',
-        filledQty:  v === 'filled' ? qty : '0',
-        fillPrice:  v === 'filled' ? d.buyPrice : null,
+        status:'pending', filledUsdt:'0', filledQty:'0', fillPrice:null,
         ts:Date.now(), note:''
       };
       pushOrder(order);
-      if(v === 'pending') session.conversation.data.pendingOrderId = order.id;
-      return v === 'filled' ? 'afterBuyFilled' : 'afterPending';
+      session.conversation.data.pendingOrderId = order.id;
+      return 'afterPending';
     }
+    
   },
 
 
@@ -1864,6 +1872,15 @@ const STATES = {
     next:(v,d)=>{
       if(v.act === 'stillPending'){ toast('⏳ এখনো pending — কোনো পরিবর্তন হয়নি'); return '__keep'; }
       const id = d.pendingOrderId || ([...session.orders].reverse().find(o => o.status === 'pending') || {}).id;
+     
+
+      delete d.recvOrderId;
+      if(v.act === 'fill' && id){
+        d.recvOrderId = id;
+        return 'askRecvQty';
+      }
+
+      
       if(id){
         if(v.act === 'fillPartial') fillOrder(id, v.qty, v.usdt, true);
         else if(v.act === 'fill') fillOrder(id, null, null, true);

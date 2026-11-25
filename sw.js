@@ -6,7 +6,7 @@
  * Cache version comment must match CACHE_NAME below.
  */
 
-const CACHE_VERSION = 'v12';
+const CACHE_VERSION = 'v13';
 const CACHE_NAME = `pepe-shell-${CACHE_VERSION}`;
 
 const SHELL = [

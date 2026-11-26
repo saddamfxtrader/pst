@@ -2271,10 +2271,13 @@ function completionMessage(p){
 }
 
 /* ── Chat rendering & state flow ── */
-function scrollChatSmart(){ 
-  // প্রতিবার নতুন মেসেজ আসলে বা পাঠালে অটোমেটিক নিচে স্ক্রল হবে
-  requestAnimationFrame(() => { chatBox.scrollTop = chatBox.scrollHeight; }); 
-}
+let userScrolledUp = false;
+const SCROLL_THRESHOLD = 60;
+function isNearBottom(){ return (chatBox.scrollHeight - chatBox.scrollTop - chatBox.clientHeight) < SCROLL_THRESHOLD; }
+function scrollChatSmart(){ if(!userScrolledUp || isNearBottom()){ requestAnimationFrame(() => { chatBox.scrollTop = chatBox.scrollHeight; }); } }
+chatBox.addEventListener('scroll', () => { userScrolledUp = !isNearBottom(); }, { passive:true });
+
+
   
   function fmtMsgTime(ts){
   const d = new Date(ts), now = new Date();

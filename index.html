@@ -2274,7 +2274,23 @@ function completionMessage(p){
 let userScrolledUp = false;
 const SCROLL_THRESHOLD = 60;
 function isNearBottom(){ return (chatBox.scrollHeight - chatBox.scrollTop - chatBox.clientHeight) < SCROLL_THRESHOLD; }
-function scrollChatSmart(){ if(!userScrolledUp || isNearBottom()){ requestAnimationFrame(() => { chatBox.scrollTop = chatBox.scrollHeight; }); } }
+
+
+
+  let forceScrollUntil = 0;
+function scrollChatSmart(){
+  if(Date.now() < forceScrollUntil || !userScrolledUp || isNearBottom()){
+    requestAnimationFrame(() => { chatBox.scrollTop = chatBox.scrollHeight; });
+  }
+}
+function forceScrollDown(){
+  userScrolledUp = false;
+  forceScrollUntil = Date.now() + 1000;  /* bot-এর reply আসা পর্যন্ত নিচে ধরে রাখবে */
+  scrollChatSmart();
+}
+
+
+  
 chatBox.addEventListener('scroll', () => { userScrolledUp = !isNearBottom(); }, { passive:true });
 
 
@@ -2445,6 +2461,7 @@ function handleBack(){
   if(!st || !st.back) return;
   const target = typeof st.back === 'function' ? st.back(session.conversation.data) : st.back;
   if(!target) return;
+  forceScrollDown();
   const curField = st.field;
   if(curField && session.conversation.data[curField] !== undefined) delete session.conversation.data[curField];
   if(session.conversation.data._fill !== undefined) delete session.conversation.data._fill;
@@ -2458,6 +2475,7 @@ function handleSubmit(){
   if(submitLock) return;
   const raw = input.value.trim();
   if(!raw) return;
+  forceScrollDown();
   const stateName = session.conversation.state;
 
   if(stateName === 'sessionComplete'){ input.value = ''; return; }
@@ -3170,6 +3188,7 @@ el('stepRestart').onclick = () => {
   }
   if(session.conversation.data._fill !== undefined) delete session.conversation.data._fill;
   if(st.back){
+    forceScrollDown();
     input.value = '';
     goToState(name);
   }
@@ -3189,7 +3208,13 @@ quickBox.addEventListener('mousedown', e => e.preventDefault());
   
 /* Chat open/close */
 let chatInitialized = false;
-function openChat(){
+
+  
+ function openChat(){
+  /* ব্যাক বাটনের জন্য history-তে একটি entry যোগ */
+  if(!(history.state && history.state.chatOpen)){
+    history.pushState({ chatOpen:true }, '');
+  }
   el('chatwin').classList.add('open');
   if(!chatInitialized || chatHistory.length === 0){
     chatInitialized = true;
@@ -3200,6 +3225,8 @@ function openChat(){
 
 function closeChat(){
   el('chatwin').classList.remove('open');
+  /* ✕ বা 💬 দিয়ে বন্ধ করলে যোগ করা entry সরিয়ে দেওয়া */
+  if(history.state && history.state.chatOpen) history.back();
 }
 el('chatClose').onclick = closeChat;
 
@@ -3246,9 +3273,10 @@ el('chatClose').onclick = closeChat;
   fab.addEventListener('pointercancel', () => { dragging = false; });
 })();
 
+
 /* Back button closes chat */
 window.addEventListener('popstate', () => {
-  if(el('chatwin').classList.contains('open')) closeChat();
+  el('chatwin').classList.remove('open');
 });
 
 /* ═══════════════════════════════════════════════════════
